@@ -117,16 +117,29 @@ source .venv/bin/activate
 python worker.py
 ```
 
-## 一键容器化启动（含前后端）
+## 容器化启动（推荐分层）
 
 ```bash
-docker compose --profile app up --build
+docker compose up -d postgres redis minio
+```
+
+如需再启动后端与前端容器：
+
+```bash
+docker compose --profile app up -d go-backend web-ui
+```
+
+如需启动 AI 容器（重依赖、首次很慢）：
+
+```bash
+docker compose --profile app up -d ai-service
 ```
 
 说明：
 
 - `ai-service` 依赖较重，首次构建会很久（下载 vLLM/torch/docling）。
 - 没有 GPU 或未安装 NVIDIA Container Toolkit 时，`ai-service` 可能无法正常运行。
+- 建议先确认前后端主链路可用，再单独引入 AI 服务。
 
 ## API 端点
 
@@ -158,6 +171,10 @@ MINIO_CONSOLE_PORT=9001
 BACKEND_PORT=8080
 WEB_PORT=5173
 AI_GRPC_PORT=50051
+
+# Backend Runtime
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+DB_AUTO_MIGRATE=true
 ```
 
 后端本地运行读取以下变量（未设置时有默认值）：
@@ -176,6 +193,11 @@ MINIO_ENDPOINT=localhost:9000
 MINIO_USER=minioadmin
 MINIO_PASSWORD=minioadmin123
 MINIO_BUCKET=thinkbank-assets
+
+# 可选：白名单 CORS，逗号分隔
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+# 可选：禁用自动迁移（受限数据库权限时建议 false）
+DB_AUTO_MIGRATE=true
 ```
 
 ## 常见问题排查
@@ -205,6 +227,12 @@ ss -ltn '( sport = :5432 or sport = :6379 or sport = :9000 or sport = :9001 or s
 env -u GOROOT go test ./...
 env -u GOROOT go run .
 ```
+
+长期修复（推荐）：
+
+- 检查并删除 shell 配置里的旧 `GOROOT`，例如 `~/.bashrc` / `~/.zshrc`
+- 重新加载配置：`source ~/.bashrc`
+- 验证：`go env GOROOT && go version`
 
 ### 3) 前端页面出现 `Failed to fetch`
 
