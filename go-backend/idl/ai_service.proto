@@ -1,0 +1,153 @@
+syntax = "proto3";
+
+package ai_service;
+
+option go_package = "thinkbank/backend/idl/ai_service";
+
+// AI Worker Service - Handles asset processing and RAG chat
+service AiWorker {
+  // ProcessAsset triggers AI analysis on an uploaded asset
+  // Returns processing status immediately (async processing)
+  rpc ProcessAsset (AssetRequest) returns (ProcessStatus);
+
+  // ChatStream provides RAG-based conversational AI
+  // Streams response chunks for real-time interaction
+  rpc ChatStream (ChatRequest) returns (stream ChatResponse);
+
+  // GetEmbedding generates embeddings for text or image
+  rpc GetEmbedding (EmbeddingRequest) returns (EmbeddingResponse);
+
+  // VectorSearch performs similarity search in the vector database
+  rpc VectorSearch (SearchRequest) returns (SearchResponse);
+}
+
+// Request to process an asset (image or document)
+message AssetRequest {
+  string asset_id = 1;      // UUID of the asset in database
+  string file_path = 2;     // MinIO object path (bucket/object)
+  string mime_type = 3;     // MIME type for processing routing
+  ProcessingOptions options = 4;  // Optional processing configuration
+}
+
+// Processing configuration options
+message ProcessingOptions {
+  bool enable_ocr = 1;           // Enable OCR for images
+  bool enable_caption = 2;       // Generate image caption
+  bool enable_embedding = 3;     // Generate vector embeddings
+  bool enable_summary = 4;       // Generate document summary
+  int32 max_chunk_size = 5;      // Max chunk size for document splitting
+}
+
+// Status response for asset processing
+message ProcessStatus {
+  bool success = 1;
+  string error = 2;
+  ProcessingStage stage = 3;
+  float progress = 4;            // 0.0 to 1.0
+}
+
+// Processing stages for status tracking
+enum ProcessingStage {
+  STAGE_UNKNOWN = 0;
+  STAGE_QUEUED = 1;
+  STAGE_DOWNLOADING = 2;
+  STAGE_PROCESSING = 3;
+  STAGE_EMBEDDING = 4;
+  STAGE_COMPLETED = 5;
+  STAGE_FAILED = 6;
+}
+
+// Chat request with context history
+message ChatRequest {
+  string query = 1;             // User's question
+  repeated ChatMessage history = 2;  // Conversation history
+  ChatOptions options = 3;      // Search and generation options
+}
+
+// Single chat message in history
+message ChatMessage {
+  string role = 1;              // "user" or "assistant"
+  string content = 2;           // Message content
+  int64 timestamp = 3;          // Unix timestamp
+}
+
+// Chat configuration options
+message ChatOptions {
+  int32 max_context_docs = 1;   // Max documents to include in context
+  float similarity_threshold = 2;  // Minimum similarity score
+  bool include_images = 3;      // Include image results in context
+  bool stream_response = 4;     // Enable streaming response
+}
+
+// Streaming chat response chunk
+message ChatResponse {
+  string chunk = 1;             // Text chunk of the response
+  bool is_final = 2;            // True if this is the last chunk
+  repeated SearchResult sources = 3;  // Source documents used (final chunk only)
+}
+
+// Embedding request for text or image
+message EmbeddingRequest {
+  oneof content {
+    string text = 1;            // Text to embed
+    ImageData image = 2;        // Image to embed
+  }
+  EmbeddingType type = 3;       // Type of embedding to generate
+}
+
+// Image data for embedding
+message ImageData {
+  bytes data = 1;               // Raw image bytes
+  string format = 2;            // Image format (png, jpg, etc.)
+}
+
+// Types of embeddings available
+enum EmbeddingType {
+  EMBEDDING_UNKNOWN = 0;
+  EMBEDDING_SEMANTIC = 1;       // BGE-M3 text embedding (1024 dims)
+  EMBEDDING_VISUAL = 2;         // SigLIP image embedding (1152 dims)
+  EMBEDDING_BOTH = 3;           // Generate both if applicable
+}
+
+// Embedding response
+message EmbeddingResponse {
+  repeated float semantic_vector = 1;  // BGE-M3 embedding
+  repeated float visual_vector = 2;    // SigLIP embedding
+  bool success = 3;
+  string error = 4;
+}
+
+// Vector search request
+message SearchRequest {
+  string query = 1;             // Search query text
+  SearchType type = 2;          // Type of search
+  int32 limit = 3;              // Max results to return
+  float threshold = 4;          // Minimum similarity score
+  repeated string filters = 5;  // Metadata filters
+}
+
+// Search type enumeration
+enum SearchType {
+  SEARCH_UNKNOWN = 0;
+  SEARCH_SEMANTIC = 1;          // Text semantic search
+  SEARCH_VISUAL = 2;            // Image similarity search
+  SEARCH_HYBRID = 3;            // Combined search
+}
+
+// Search result item
+message SearchResult {
+  string asset_id = 1;          // Asset UUID
+  float score = 2;              // Similarity score
+  string caption = 3;           // Asset caption/summary
+  string mime_type = 4;         // Asset MIME type
+  string thumbnail_url = 5;     // Thumbnail URL if available
+  map<string, string> metadata = 6;  // Additional metadata
+}
+
+// Search response with results
+message SearchResponse {
+  repeated SearchResult results = 1;
+  int32 total_count = 2;        // Total matching results
+  bool success = 3;
+  string error = 4;
+}

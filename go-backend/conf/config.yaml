@@ -1,0 +1,32 @@
+# ThinkBank Backend Configuration
+
+server:
+  host: 0.0.0.0
+  port: 8080
+
+database:
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:5432}
+  user: ${DB_USER:thinkbank}
+  password: ${DB_PASSWORD:thinkbank123}
+  name: ${DB_NAME:thinkbank}
+  sslmode: disable
+  max_conns: 20
+  min_conns: 5
+
+redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  db: 0
+  queue_name: thinkbank:tasks
+
+minio:
+  endpoint: ${MINIO_ENDPOINT:localhost:9000}
+  user: ${MINIO_USER:minioadmin}
+  password: ${MINIO_PASSWORD:minioadmin123}
+  bucket: thinkbank-assets
+  secure: false
+
+ai_service:
+  host: ${AI_SERVICE_HOST:localhost}
+  port: ${AI_SERVICE_PORT:50051}
