@@ -1,27 +1,29 @@
 # ThinkBank
 
-> 智能个人数据资产管理系统 - 自托管、隐私优先的“智能图库”与“第二大脑”
+[简体中文](./README.zh-CN.md)
 
-ThinkBank 是一个本地优先的个人数据管理系统，利用本地 AI 模型对个人数字资产（图片、文档）进行组织、分析和检索。
+> Intelligent personal data asset management system - self-hosted, privacy-first smart gallery and second brain.
 
-## 核心特性
+ThinkBank is a local-first personal data management system. It uses local AI models to organize, analyze, and retrieve personal digital assets (images and documents).
 
-- 数据主权：所有数据保留在本地，完全掌控
-- 智能摄入：上传后自动打标签、OCR 和向量化
-- 自然交互：使用 RAG 与数据进行对话
+## Core Features
 
-## 技术栈
+- Data sovereignty: all data stays local.
+- Smart ingestion: auto tagging, OCR, and vectorization after upload.
+- Natural interaction: chat with your data using RAG.
 
-| 层级 | 技术 |
+## Tech Stack
+
+| Layer | Technology |
 | --- | --- |
-| 后端 | Go / Hertz |
-| AI 服务 | Python / LangChain / vLLM |
-| 数据库 | PostgreSQL 16 + pgvector |
-| 对象存储 | MinIO (S3 兼容) |
-| 缓存/队列 | Redis 7 |
-| 前端 | React + Vite + Tailwind + shadcn/ui |
+| Backend | Go / Hertz |
+| AI Service | Python / LangChain / vLLM |
+| Database | PostgreSQL 16 + pgvector |
+| Object Storage | MinIO (S3 compatible) |
+| Cache/Queue | Redis 7 |
+| Frontend | React + Vite + Tailwind + shadcn/ui |
 
-## 项目结构
+## Project Structure
 
 ```text
 thinkbank/
@@ -32,17 +34,17 @@ thinkbank/
 └── web-ui/
 ```
 
-## 环境要求
+## Prerequisites
 
 - Docker Engine + Docker Compose Plugin
 - Go 1.25+
 - Node.js 20+
 - Python 3.11+
-- 可选：NVIDIA GPU + NVIDIA Container Toolkit（AI 容器模式）
+- Optional: NVIDIA GPU + NVIDIA Container Toolkit (for AI container mode)
 
-## 快速开始（推荐：本地开发模式）
+## Quick Start (Recommended: Local Dev Mode)
 
-### 1) 克隆并准备环境变量
+### 1. Clone and prepare env file
 
 ```bash
 git clone <your-repo-url> thinkbank
@@ -50,24 +52,24 @@ cd thinkbank
 cp .env.example .env
 ```
 
-### 2) 启动基础设施（Postgres / Redis / MinIO）
+### 2. Start infrastructure (Postgres / Redis / MinIO)
 
 ```bash
 docker compose up -d postgres redis minio
 docker compose ps
 ```
 
-如果你的 Docker 需要 sudo，请在命令前加 `sudo`。
+If your Docker setup requires sudo, add `sudo` before those commands.
 
-健康检查：
+Health check:
 
 ```bash
 curl -i http://localhost:9000/minio/health/live
 ```
 
-预期：返回 `HTTP/1.1 200 OK`。
+Expected: `HTTP/1.1 200 OK`.
 
-### 3) 启动 Go 后端
+### 3. Start Go backend
 
 ```bash
 cd go-backend
@@ -75,19 +77,19 @@ env -u GOROOT go mod tidy
 env -u GOROOT go run .
 ```
 
-后端默认地址：`http://localhost:8080`
+Backend URL: `http://localhost:8080`
 
-健康检查：
+Health check:
 
 ```bash
 curl -i http://localhost:8080/ping
 ```
 
-预期：`{"message":"pong"}`。
+Expected: `{"message":"pong"}`.
 
-### 4) 启动前端
+### 4. Start frontend
 
-新开一个终端：
+Open a new terminal:
 
 ```bash
 cd web-ui
@@ -95,11 +97,11 @@ npm ci
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-前端地址：`http://localhost:5173`
+Frontend URL: `http://localhost:5173`
 
-### 5) 可选：启动 AI 服务（本地 Python 模式）
+### 5. Optional: Start AI service (local Python mode)
 
-新开一个终端：
+Open a new terminal:
 
 ```bash
 cd python-ai
@@ -109,7 +111,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-如需后台 worker，再开一个终端：
+For worker mode, open another terminal:
 
 ```bash
 cd python-ai
@@ -117,43 +119,45 @@ source .venv/bin/activate
 python worker.py
 ```
 
-## 容器化启动（推荐分层）
+## Container Start (Layered, Recommended)
+
+Start only infrastructure first:
 
 ```bash
 docker compose up -d postgres redis minio
 ```
 
-如需再启动后端与前端容器：
+Then start backend and frontend containers:
 
 ```bash
 docker compose --profile app up -d go-backend web-ui
 ```
 
-如需启动 AI 容器（重依赖、首次很慢）：
+Start AI container only when needed:
 
 ```bash
 docker compose --profile app up -d ai-service
 ```
 
-说明：
+Notes:
 
-- `ai-service` 依赖较重，首次构建会很久（下载 vLLM/torch/docling）。
-- 没有 GPU 或未安装 NVIDIA Container Toolkit 时，`ai-service` 可能无法正常运行。
-- 建议先确认前后端主链路可用，再单独引入 AI 服务。
+- `ai-service` is heavy and first build can take a long time.
+- Without GPU or NVIDIA Container Toolkit, `ai-service` may fail to run.
+- Validate backend/frontend first, then enable AI.
 
-## API 端点
+## API Endpoints
 
-| Method | Path | 描述 |
+| Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/ping` | 健康检查 |
-| `POST` | `/api/v1/assets/upload` | 上传文件 |
-| `GET` | `/api/v1/assets` | 获取资产列表 |
-| `GET` | `/api/v1/assets/:id` | 获取单个资产 |
-| `DELETE` | `/api/v1/assets/:id` | 删除资产 |
+| `GET` | `/ping` | Health check |
+| `POST` | `/api/v1/assets/upload` | Upload asset |
+| `GET` | `/api/v1/assets` | List assets |
+| `GET` | `/api/v1/assets/:id` | Get asset by ID |
+| `DELETE` | `/api/v1/assets/:id` | Delete asset |
 
-## 关键环境变量
+## Key Environment Variables
 
-`.env` 主要用于 `docker-compose`：
+`.env` mainly for `docker-compose`:
 
 ```env
 POSTGRES_USER=thinkbank
@@ -172,12 +176,11 @@ BACKEND_PORT=8080
 WEB_PORT=5173
 AI_GRPC_PORT=50051
 
-# Backend Runtime
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DB_AUTO_MIGRATE=true
 ```
 
-后端本地运行读取以下变量（未设置时有默认值）：
+Local backend runtime variables (with defaults if missing):
 
 ```env
 DB_HOST=localhost
@@ -194,61 +197,63 @@ MINIO_USER=minioadmin
 MINIO_PASSWORD=minioadmin123
 MINIO_BUCKET=thinkbank-assets
 
-# 可选：白名单 CORS，逗号分隔
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-# 可选：禁用自动迁移（受限数据库权限时建议 false）
 DB_AUTO_MIGRATE=true
 ```
 
-## 常见问题排查
+## Troubleshooting
 
-### 1) `docker compose up` 报端口占用
+### 1. `docker compose up` fails with port conflict
 
-报错示例：`bind: address already in use`。
+Example: `bind: address already in use`
 
-检查占用：
+Check occupied ports:
 
 ```bash
 ss -ltn '( sport = :5432 or sport = :6379 or sport = :9000 or sport = :9001 or sport = :8080 or sport = :5173 )'
 ```
 
-处理方式：
+Fix options:
 
-- 停掉占用进程/服务，或
-- 修改 `.env` 中端口映射（例如把 `POSTGRES_PORT` 改为 `15432`）
+- Stop conflicting services/processes.
+- Change host port mappings in `.env` (for example `POSTGRES_PORT=15432`).
 
-### 2) Go 编译报 `compile: version "go1.xx" does not match go tool version`
+### 2. Go version mismatch error
 
-通常是本机 `GOROOT` 指向了旧版本。
+Error example: `compile: version "go1.xx" does not match go tool version`
 
-临时修复：
+Quick workaround:
 
 ```bash
 env -u GOROOT go test ./...
 env -u GOROOT go run .
 ```
 
-长期修复（推荐）：
+Long-term fix:
 
-- 检查并删除 shell 配置里的旧 `GOROOT`，例如 `~/.bashrc` / `~/.zshrc`
-- 重新加载配置：`source ~/.bashrc`
-- 验证：`go env GOROOT && go version`
+- Remove stale `GOROOT` export from shell config (`~/.bashrc` or `~/.zshrc`).
+- Reload shell config.
+- Verify with:
 
-### 3) 前端页面出现 `Failed to fetch`
+```bash
+go env GOROOT && go version
+```
 
-先确认后端是否在 `:8080`：
+### 3. Frontend shows `Failed to fetch`
+
+Verify backend first:
 
 ```bash
 curl -i http://localhost:8080/ping
 ```
 
-再确认前端 API 地址（`web-ui/src/lib/api.ts` 默认 `http://localhost:8080`）。
+Then verify frontend API base URL in `web-ui/src/lib/api.ts` (default: `http://localhost:8080`).
 
-### 4) `docker compose ps` 显示 `Created` 而不是 `Up`
+### 4. `docker compose ps` shows `Created` instead of `Up`
 
-说明容器未成功启动（通常是端口冲突或依赖条件未满足）。
+Usually caused by port conflicts or failed dependencies.
 
-查看日志：
+Check logs:
 
 ```bash
 docker compose logs postgres --tail=50
@@ -256,33 +261,33 @@ docker compose logs redis --tail=50
 docker compose logs minio --tail=50
 ```
 
-### 5) AI 容器启动慢或模型未加载
+### 5. AI container is slow or model not loaded
 
-- 首次构建下载非常大，耐心等待
-- 先检查 GPU：
+- First build is very large, wait for completion.
+- Check GPU:
 
 ```bash
 nvidia-smi
 ```
 
-- 再看 AI 日志：
+- Check AI logs:
 
 ```bash
 docker compose --profile app logs ai-service --tail=100
 ```
 
-## 停止服务
+## Stop Services
 
 ```bash
-# 停止 compose 服务
+# Stop compose services
 docker compose down
 
-# 停止并删除卷（会清空数据库/对象存储数据）
+# Stop and remove volumes (this deletes DB/object data)
 docker compose down -v
 ```
 
-若你是本地 `go run` / `npm run dev` 启动，请在对应终端中 `Ctrl+C` 停止。
+If you started local dev with `go run` or `npm run dev`, stop them with `Ctrl+C` in their terminals.
 
-## 许可证
+## License
 
 MIT License
