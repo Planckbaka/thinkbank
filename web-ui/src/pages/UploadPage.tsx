@@ -27,6 +27,9 @@ const ACCEPTED_TYPES = [
   'application/pdf',
   'text/plain',
   'text/markdown',
+  '.md',
+  '.markdown',
+  '.txt',
 ];
 
 export function UploadPage() {

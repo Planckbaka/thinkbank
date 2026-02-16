@@ -291,21 +291,21 @@ class AssetProcessor:
         try:
             import fitz  # PyMuPDF
             doc = fitz.open(file_path)
-            text = ""
+            content = ""
             for page in doc:
-                text += page.get_text()
+                content += page.get_text()
             doc.close()
 
             # Generate embedding
             from core.embeddings import get_text_embedder
             embedder = get_text_embedder()
-            embedding = embedder.embed_single(text[:8000])  # Limit text length
+            embedding = embedder.embed_single(content[:8000])  # Limit text length
 
             # Update database
             # Update database with Document category
             await session.execute(
                 text("UPDATE assets SET content_text = :text, caption = :caption, metadata = jsonb_set(metadata, '{category}', '\"Document\"') WHERE id = :id"),
-                {"text": text, "caption": text[:500], "id": asset_id}
+                {"text": content, "caption": content[:500], "id": asset_id}
             )
 
             # Store embedding
@@ -328,17 +328,17 @@ class AssetProcessor:
         logger.info(f"Processing text: {asset_id}")
 
         with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read()
+            content = f.read()
 
         # Generate embedding
         from core.embeddings import get_text_embedder
         embedder = get_text_embedder()
-        embedding = embedder.embed_single(text[:8000])
+        embedding = embedder.embed_single(content[:8000])
 
         # Update database
         await session.execute(
             text("UPDATE assets SET content_text = :text, caption = :caption WHERE id = :id"),
-            {"text": text, "caption": text[:500], "id": asset_id}
+            {"text": content, "caption": content[:500], "id": asset_id}
         )
 
         # Store embedding
