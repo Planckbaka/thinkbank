@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Separator } from '@/components/ui/separator';
 import { getAssets, deleteAsset, formatFileSize, type Asset } from '@/lib/api';
 
+const CATEGORIES = ['All', 'Landscape', 'Portrait', 'Document', 'Screenshot', 'Food', 'Animal', 'Graphic Design', 'Other'];
+
 const STATUS_COLORS: Record<string, string> = {
   PENDING: 'bg-yellow-500',
   PROCESSING: 'bg-blue-500',
@@ -26,13 +28,15 @@ export function GalleryPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [activeCategory, setActiveCategory] = useState('All');
 
-  const fetchAssets = async (pageNum = 1, append = false) => {
+  const fetchAssets = async (pageNum = 1, append = false, category?: string) => {
     try {
       setLoading(true);
       setError(null);
 
-      const response = await getAssets(pageNum, 20);
+      const catFilter = category && category !== 'All' ? category : undefined;
+      const response = await getAssets(pageNum, 20, undefined, catFilter);
 
       if (append) {
         setAssets((prev) => [...prev, ...response.assets]);
@@ -51,17 +55,22 @@ export function GalleryPage() {
   };
 
   useEffect(() => {
-    fetchAssets(1);
-  }, []);
+    fetchAssets(1, false, activeCategory);
+  }, [activeCategory]);
 
   const handleRefresh = () => {
-    fetchAssets(1);
+    fetchAssets(1, false, activeCategory);
   };
 
   const handleLoadMore = () => {
     if (!loading && hasMore) {
-      fetchAssets(page + 1, true);
+      fetchAssets(page + 1, true, activeCategory);
     }
+  };
+
+  const handleCategoryChange = (cat: string) => {
+    setActiveCategory(cat);
+    setPage(1);
   };
 
   const handleDelete = async (asset: Asset) => {
@@ -109,6 +118,20 @@ export function GalleryPage() {
           )}
           <span className="ml-2">Refresh</span>
         </Button>
+      </div>
+
+      {/* Category Filter */}
+      <div className="flex flex-wrap gap-2">
+        {CATEGORIES.map((cat) => (
+          <Button
+            key={cat}
+            variant={activeCategory === cat ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => handleCategoryChange(cat)}
+          >
+            {cat}
+          </Button>
+        ))}
       </div>
 
       {/* Error State */}
@@ -174,8 +197,13 @@ export function GalleryPage() {
                 {/* Overlay Gradient */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
-                {/* Status Badge */}
-                <div className="absolute top-2 right-2">
+                {/* Status Badge + Category */}
+                <div className="absolute top-2 right-2 flex items-center gap-1.5">
+                  {asset.category && asset.category !== 'Other' && (
+                    <span className="px-1.5 py-0.5 bg-black/50 backdrop-blur-sm text-white text-[10px] font-medium rounded">
+                      {asset.category}
+                    </span>
+                  )}
                   <div
                     className={`h-2.5 w-2.5 rounded-full ${STATUS_COLORS[asset.processing_status]}`}
                     title={asset.processing_status}
@@ -283,6 +311,12 @@ export function GalleryPage() {
                       {new Date(selectedAsset.created_at).toLocaleDateString()}
                     </span>
                   </div>
+                  {selectedAsset.category && (
+                    <div>
+                      <span className="text-muted-foreground">Category: </span>
+                      <span className="font-medium">{selectedAsset.category}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </>

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Vision Captioning Model (CPU/Offload)
     vision_model: str = Field(
-        default="Salesforce/blip-image-captioning-base"
+        default="HuggingFaceTB/SmolVLM-500M-Instruct"
     )
 
     # Processing

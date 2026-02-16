@@ -21,6 +21,7 @@
 - **Host machine (application services):**
   - vLLM (OpenAI-compatible API)
   - python-ai gRPC service
+  - python-ai Embed Server (HTTP)
   - python-ai Redis worker
   - go-backend (Hertz API gateway)
   - web-ui (Vite + React)
@@ -48,11 +49,13 @@ This mode is required for current environment constraints and GPU stability.
 - Language: Python 3.11+
 - LLM client: `langchain-openai` (OpenAI-compatible HTTP)
 - Inference server: host vLLM
+- Embed server: `embed_server.py` (FastAPI, HTTP)
 - Embedding/CV runtime: CPU only (`device='cpu'`)
 - Main models:
-  - LLM: `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` (vLLM)
-  - Text embedding: `BAAI/bge-m3`
-  - Image caption / vision: current configured vision model in `python-ai/core/vision.py`
+  - LLM: `Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4` (vLLM, GPU)
+  - Text embedding: `BAAI/bge-m3` (CPU, 1024-dim)
+  - Image embedding: `sentence-transformers/clip-ViT-B-32` (CPU, 512-dim)
+  - Vision captioning/classification: `HuggingFaceTB/SmolVLM-500M-Instruct` (CPU, <1GB)
 
 #### 3.3 Data Layer
 - PostgreSQL 16 + pgvector
@@ -78,6 +81,7 @@ graph TD
 
     subgraph Host App Services
       PyGRPC[python-ai gRPC]
+      PyEmbed[python-ai Embed HTTP]
       PyWorker[python-ai Redis Worker]
       vLLM[vLLM OpenAI API]
     end
@@ -86,6 +90,7 @@ graph TD
     GoAPI --> MinIO
     GoAPI --> Redis
     GoAPI -->|health / grpc reachability| PyGRPC
+    GoAPI -->|embedding http| PyEmbed
 
     PyWorker --> Redis
     PyWorker --> MinIO
@@ -104,15 +109,19 @@ graph TD
 2. Backend writes object to MinIO and metadata to PostgreSQL.
 3. Backend pushes task ID to Redis queue.
 4. `python-ai` worker consumes task:
-   - image: generate caption + embeddings
+   - image: generate caption + classify category + generate embeddings
    - document/text: extract content + semantic embedding
-5. Worker writes caption/content/embedding and marks status (`COMPLETED` / `FAILED`).
+5. Worker writes caption/category/content/embedding and marks status (`COMPLETED` / `FAILED`).
 
-#### 5.2 Character-Based Retrieval
+#### 5.2 Hybrid Search (Character + Vector)
 1. User inputs query in Search page.
 2. Frontend calls `GET /api/v1/search?q=...`.
-3. Backend performs character-level matching/scoring over filename, mime, caption, content text.
-4. Backend returns ranked results and presigned MinIO URLs.
+3. Backend embeds query text via python-ai gRPC → 1024-dim vector.
+4. Backend performs hybrid scoring:
+   - Vector similarity: cosine distance against `asset_embeddings.semantic_vector` via pgvector
+   - Character matching: rune-level scoring over filename, caption, content text
+   - Final score: `0.7 × vector_score + 0.3 × character_score`
+5. Backend returns ranked results and presigned MinIO URLs.
 
 #### 5.3 RAG Chat (Image + Document Context)
 1. User sends message to `POST /api/v1/chat`.
@@ -133,6 +142,7 @@ graph TD
 - `size_bytes`
 - `caption`
 - `content_text`
+- `category` (varchar, default 'Other')
 - `metadata` (JSONB)
 - `processing_status` (`PENDING|PROCESSING|COMPLETED|FAILED`)
 - `created_at`, `updated_at`
@@ -172,8 +182,8 @@ graph TD
 ---
 
 ### 8. Non-Goals / Deferred
-- Full multi-modal vector nearest-neighbor endpoint is not yet exposed as dedicated public REST API.
-- Streaming chat response is not yet enabled in current REST `/chat` implementation.
+- Streaming chat response is not yet enabled in current REST `/chat` implementation (planned).
+- Multi-modal vector nearest-neighbor is used internally for search but not exposed as a dedicated public API.
 
 ---
 
@@ -184,6 +194,7 @@ thinkbank/
 ├── docker-compose.yml          # Infra services (postgres/redis/minio)
 ├── start-infra.sh              # Start Docker infra only
 ├── start-host-app.sh           # Start host app services
+├── run-ai-embed-host.sh        # Start embed server
 ├── go-backend/                 # Go API gateway
 ├── python-ai/                  # gRPC service + worker
 ├── web-ui/                     # Frontend

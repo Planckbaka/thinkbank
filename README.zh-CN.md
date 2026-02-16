@@ -10,6 +10,7 @@ ThinkBank 是一个本地优先的个人数据管理系统，利用本地 AI 模
 
 - 数据主权：所有数据保留在本地，完全掌控
 - 智能摄入：上传后自动打标签、OCR 和向量化
+- 实时反馈：可视化追踪处理队列与状态
 - 自然交互：使用 RAG 与数据进行对话
 
 ## 技术栈
@@ -36,6 +37,7 @@ thinkbank/
 ├── run-backend-host.sh
 ├── run-ai-host.sh
 ├── run-ai-worker-host.sh
+├── run-ai-embed-host.sh
 ├── run-vllm-host.sh
 └── run-web-host.sh
 ```
@@ -79,25 +81,31 @@ pip install vllm
 ./run-vllm-host.sh
 ```
 
-4. 在主机启动 Python AI gRPC 服务（新终端）：
+4. 在主机启动 Python AI Embed 服务（新终端）：
+
+```bash
+./run-ai-embed-host.sh
+```
+
+5. 在主机启动 Python AI gRPC 服务（新终端）：
 
 ```bash
 ./run-ai-host.sh
 ```
 
-5. 在主机启动 Python AI Worker（新终端）：
+6. 在主机启动 Python AI Worker（新终端）：
 
 ```bash
 ./run-ai-worker-host.sh
 ```
 
-6. 在主机启动 Go 后端（新终端）：
+7. 在主机启动 Go 后端（新终端）：
 
 ```bash
 ./run-backend-host.sh
 ```
 
-7. 在主机启动前端（新终端）：
+8. 在主机启动前端（新终端）：
 
 ```bash
 cd web-ui
@@ -106,7 +114,7 @@ cd ..
 ./run-web-host.sh
 ```
 
-8. 验证：
+9. 验证：
 
 ```bash
 curl -i http://localhost:8080/ping
@@ -136,7 +144,7 @@ docker compose --profile app ps
 | `GET` | `/api/v1/assets/:id` | 获取单个资产 |
 | `DELETE` | `/api/v1/assets/:id` | 删除资产 |
 | `GET` | `/api/v1/ai/health` | 检查 AI 与 LLM 可用性 |
-| `GET` | `/api/v1/search?q=&limit=&threshold=` | 基于文件名/描述/内容的字符检索 |
+| `GET` | `/api/v1/search?q=&limit=&threshold=` | 混合（矢量 + 字符）检索 |
 | `POST` | `/api/v1/chat` | RAG 问答（返回 `answer` 和 `sources`） |
 
 ## 关键环境变量
@@ -166,8 +174,8 @@ DB_AUTO_MIGRATE=true
 
 LLM_MODEL=Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
 LLM_API_KEY=sk-local
-VLLM_GPU_MEMORY_UTILIZATION=0.85
-VLLM_MAX_MODEL_LEN=8192
+VLLM_GPU_MEMORY_UTILIZATION=0.7
+VLLM_MAX_MODEL_LEN=4096
 VLLM_MAX_NUM_SEQS=32
 VLLM_MAX_NUM_BATCHED_TOKENS=1024
 VLLM_DTYPE=float16
@@ -268,6 +276,32 @@ docker info | rg -i nvidia
 若没有 `nvidia` runtime：
 - 安装 NVIDIA Container Toolkit 并重启 Docker，或
 - 切到方案 A，直接在主机运行 `./run-vllm-host.sh`。
+
+### 6) vLLM 报显存不足 (OOM)
+
+如果在 8GB 显卡初始化或生成时崩溃：
+- 降低 `.env` 中的 `VLLM_GPU_MEMORY_UTILIZATION`（默认 0.7 或 0.8）：
+  ```env
+  VLLM_GPU_MEMORY_UTILIZATION=0.6
+  ```
+- 降低 Context 长度：
+  ```env
+  VLLM_MAX_MODEL_LEN=2048
+  ```
+
+### 7) 服务无法重启 / 端口持续占用
+
+如果停止服务后，`./run-backend-host.sh` 仍报 "address already in use"：
+- 说明可能有僵尸进程未被杀死。
+- 运行强力清理脚本：
+  ```bash
+  ./stop-host-app.sh
+  ```
+- 或手动杀死相关进程：
+  ```bash
+  pkill -f "thinkbank/backend"
+  pkill -f "workers.asset_processor"
+  ```
 
 ## 停止服务
 

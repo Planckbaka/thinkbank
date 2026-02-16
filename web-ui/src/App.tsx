@@ -8,6 +8,8 @@ import { Layout } from '@/components/layout/Layout';
 import { GalleryPage } from '@/pages/GalleryPage';
 import { UploadPage } from '@/pages/UploadPage';
 import { SearchPage } from '@/pages/SearchPage';
+import { ChatPage } from '@/pages/ChatPage';
+import { DocumentsPage } from '@/pages/DocumentsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +29,8 @@ function App() {
             <Route index element={<GalleryPage />} />
             <Route path="upload" element={<UploadPage />} />
             <Route path="search" element={<SearchPage />} />
+            <Route path="chat" element={<ChatPage />} />
+            <Route path="documents" element={<DocumentsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
@@ -35,3 +39,4 @@ function App() {
 }
 
 export default App;
+

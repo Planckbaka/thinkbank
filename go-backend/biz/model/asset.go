@@ -18,6 +18,7 @@ type Asset struct {
 	ObjectName       string         `gorm:"type:varchar(255);not null" json:"object_name"`
 	MimeType         string         `gorm:"type:varchar(127);not null" json:"mime_type"`
 	SizeBytes        int64          `gorm:"not null" json:"size_bytes"`
+	Category         string         `gorm:"type:varchar(64);default:'Other'" json:"category"`
 	Caption          string         `gorm:"type:text" json:"caption"`
 	ContentText      string         `gorm:"type:text" json:"content_text"`
 	Metadata         JSONB          `gorm:"type:jsonb;default:'{}'" json:"metadata"`

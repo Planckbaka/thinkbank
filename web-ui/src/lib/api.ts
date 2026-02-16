@@ -9,6 +9,7 @@ export interface Asset {
   file_name: string;
   mime_type: string;
   size_bytes: number;
+  category?: string;
   caption?: string;
   processing_status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   url?: string;
@@ -90,7 +91,7 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
 /**
  * Get list of assets
  */
-export async function getAssets(page = 1, perPage = 20, status?: string): Promise<AssetListResponse> {
+export async function getAssets(page = 1, perPage = 20, status?: string, category?: string): Promise<AssetListResponse> {
   const params = new URLSearchParams({
     page: String(page),
     per_page: String(perPage),
@@ -98,6 +99,10 @@ export async function getAssets(page = 1, perPage = 20, status?: string): Promis
 
   if (status) {
     params.append('status', status);
+  }
+
+  if (category) {
+    params.append('category', category);
   }
 
   const response = await fetch(`${API_BASE}/api/v1/assets?${params}`);

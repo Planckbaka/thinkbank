@@ -37,4 +37,12 @@ stop_one "web-host"
 stop_one "backend-host"
 stop_one "ai-worker-host"
 stop_one "ai-host"
+stop_one "ai-embed-host"
 stop_one "vllm-host"
+
+echo "Ensuring no stray processes..."
+pkill -f "python3 server.py" || true
+pkill -f "python3 embed_server.py" || true
+pkill -f "python3 -m workers.asset_processor" || true
+pkill -f "vite" || true
+pkill -f "thinkbank/backend/cmd" || true

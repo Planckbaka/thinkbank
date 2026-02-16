@@ -232,6 +232,20 @@ class AssetProcessor:
         if caption_zh:
             caption = f"{caption_en} | 中文: {caption_zh}"
 
+        # Validate and Classify
+        try:
+            category = vision_model.classify(image)
+            logger.info(f"Classified image as: {category}")
+        except Exception as e:
+            logger.warning(f"Classification failed: {e}")
+            category = "Other"
+
+        # Update specific keywords based on category
+        if category == "Document":
+             caption += " | [Document]"
+        elif category == "Screenshot":
+             caption += " | [Screenshot]"
+
         logger.info(f"Generated caption: {caption[:120]}...")
 
         # Generate embeddings:
@@ -245,8 +259,8 @@ class AssetProcessor:
 
         # Update database
         await session.execute(
-            text("UPDATE assets SET caption = :caption WHERE id = :id"),
-            {"caption": caption, "id": asset_id}
+            text("UPDATE assets SET caption = :caption, metadata = jsonb_set(metadata, '{category}', :category) WHERE id = :id"),
+            {"caption": caption, "category": f'"{category}"', "id": asset_id}
         )
 
         # Store embeddings (convert to pgvector string literal)
@@ -288,8 +302,9 @@ class AssetProcessor:
             embedding = embedder.embed_single(text[:8000])  # Limit text length
 
             # Update database
+            # Update database with Document category
             await session.execute(
-                text("UPDATE assets SET content_text = :text, caption = :caption WHERE id = :id"),
+                text("UPDATE assets SET content_text = :text, caption = :caption, metadata = jsonb_set(metadata, '{category}', '\"Document\"') WHERE id = :id"),
                 {"text": text, "caption": text[:500], "id": asset_id}
             )
 

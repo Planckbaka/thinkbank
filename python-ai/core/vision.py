@@ -99,20 +99,46 @@ class VisionCaptioningModel:
         inputs = {k: v.to("cpu") if hasattr(v, "to") else v for k, v in inputs.items()}
 
         # Generate
+        input_len = inputs["input_ids"].shape[-1]
         output_ids = self.model.generate(
             **inputs,
             max_new_tokens=max_tokens,
             do_sample=False,
         )
 
-        # Decode
-        caption = self.processor.decode(output_ids[0], skip_special_tokens=True).strip()
+        # Decode only the generated tokens (strip prompt tokens)
+        generated_ids = output_ids[0][input_len:]
+        caption = self.processor.decode(generated_ids, skip_special_tokens=True).strip()
         return caption
 
     def caption_path(self, image_path: str, prompt: str = "Describe this image with key objects and actions.") -> str:
         """Generate caption for an image from file path."""
         image = Image.open(image_path).convert("RGB")
         return self.caption(image, prompt)
+
+    def classify(self, image: Image.Image) -> str:
+        """
+        Classify image into fixed categories:
+        Landscape, Portrait, Document, Screenshot, Food, Animal, Other
+        """
+        if not self._loaded:
+            self.load()
+
+        categories = ["Landscape", "Portrait", "Document", "Screenshot", "Food", "Animal", "Graphic Design", "Other"]
+        prompt = f"Classify this image into one of these categories: {', '.join(categories)}. Return only the category name."
+
+        try:
+            # Re-use caption logic but with classification prompt
+            category = self.caption(image, prompt=prompt, max_tokens=16)
+            
+            # Simple cleanup
+            for cat in categories:
+                if cat.lower() in category.lower():
+                    return cat
+            return "Other"
+        except Exception as e:
+            logger.error(f"Classification failed: {e}")
+            return "Other"
 
 
 # Global instance

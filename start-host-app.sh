@@ -35,6 +35,7 @@ start_one() {
 }
 
 start_one "vllm-host" "./run-vllm-host.sh"
+start_one "ai-embed-host" "./run-ai-embed-host.sh"
 start_one "ai-host" "./run-ai-host.sh"
 start_one "ai-worker-host" "./run-ai-worker-host.sh"
 start_one "backend-host" "./run-backend-host.sh"
@@ -43,6 +44,7 @@ start_one "web-host" "./run-web-host.sh"
 echo
 echo "Logs:"
 echo "  logs/vllm-host.log"
+echo "  logs/ai-embed-host.log"
 echo "  logs/ai-host.log"
 echo "  logs/ai-worker-host.log"
 echo "  logs/backend-host.log"

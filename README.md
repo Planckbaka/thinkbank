@@ -12,6 +12,7 @@ ThinkBank is a local-first personal data management system. It uses local AI mod
 
 - Data sovereignty: all data stays local.
 - Smart ingestion: auto tagging, OCR, and vectorization after upload.
+- Real-time status: tracked processing queue with visual feedback.
 - Natural interaction: chat with your data using RAG.
 
 ## Tech Stack
@@ -38,6 +39,7 @@ thinkbank/
 ├── run-backend-host.sh
 ├── run-ai-host.sh
 ├── run-ai-worker-host.sh
+├── run-ai-embed-host.sh
 ├── run-vllm-host.sh
 ├── run-web-host.sh
 ├── start-host-app.sh
@@ -85,13 +87,13 @@ source .venv-ai/bin/activate && pip install -r python-ai/requirements.txt && dea
 source .venv-vllm/bin/activate && pip install vllm && deactivate
 ```
 
-4. Start vLLM on host:
+4. Start Python AI Embed service on host (new terminal):
 
 ```bash
-./run-vllm-host.sh
+./run-ai-embed-host.sh
 ```
 
-5. Start Python AI service on host (new terminal):
+5. Start Python AI gRPC service on host (new terminal):
 
 ```bash
 ./run-ai-host.sh
@@ -118,7 +120,7 @@ cd ..
 ./run-web-host.sh
 ```
 
-9. Or start all host app services in background (single command):
+9. Or start all host app services in background (including vLLM):
 
 ```bash
 ./start-host-app.sh
@@ -158,7 +160,7 @@ Notes:
 | `GET` | `/api/v1/assets/:id` | Get asset by ID |
 | `DELETE` | `/api/v1/assets/:id` | Delete asset |
 | `GET` | `/api/v1/ai/health` | Check AI + LLM availability |
-| `GET` | `/api/v1/search?q=&limit=&threshold=` | Character-based retrieval across filename/caption/content |
+| `GET` | `/api/v1/search?q=&limit=&threshold=` | Hybrid (vector + character) retrieval |
 | `POST` | `/api/v1/chat` | RAG chat, returns `answer` + `sources` |
 
 ## Key Environment Variables
@@ -188,8 +190,8 @@ DB_AUTO_MIGRATE=true
 
 LLM_MODEL=Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
 LLM_API_KEY=sk-local
-VLLM_GPU_MEMORY_UTILIZATION=0.85
-VLLM_MAX_MODEL_LEN=8192
+VLLM_GPU_MEMORY_UTILIZATION=0.7
+VLLM_MAX_MODEL_LEN=4096
 VLLM_MAX_NUM_SEQS=32
 VLLM_MAX_NUM_BATCHED_TOKENS=1024
 VLLM_DTYPE=float16
@@ -290,6 +292,32 @@ docker info | rg -i nvidia
 If no `nvidia` runtime is available:
 - Install NVIDIA Container Toolkit and restart Docker, or
 - Use Mode A (Hybrid) and run vLLM directly on host via `./run-vllm-host.sh`.
+
+### 6. vLLM Out Of Memory (OOM) on 8GB GPUs
+
+If vLLM crashes during initialization or generation with 8GB VRAM:
+- Lower gpu_memory_utilization in `.env` (default is 0.7 or 0.8 for 8GB cards):
+  ```env
+  VLLM_GPU_MEMORY_UTILIZATION=0.6
+  ```
+- Reduce context length:
+  ```env
+  VLLM_MAX_MODEL_LEN=2048
+  ```
+
+### 7. Services fail to restart / Port already in use
+
+If `./run-backend-host.sh` fails with "address already in use" even after stopping services:
+- You may have zombie processes.
+- Run the aggressive cleanup script:
+  ```bash
+  ./stop-host-app.sh
+  ```
+- Or manually kill them:
+  ```bash
+  pkill -f "thinkbank/backend"
+  pkill -f "workers.asset_processor"
+  ```
 
 ## Stop Services
 

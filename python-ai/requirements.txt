@@ -29,6 +29,7 @@ minio>=7.2.0
 redis>=5.0.0
 
 # Document Parsing
+pymupdf>=1.23.0
 docling>=2.0.0
 # or marker-pdf for alternative
 
@@ -40,3 +41,7 @@ python-dotenv>=1.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.0.0
 loguru>=0.7.0
+
+# HTTP API (embed endpoint for Go backend)
+fastapi>=0.115.0
+uvicorn>=0.30.0

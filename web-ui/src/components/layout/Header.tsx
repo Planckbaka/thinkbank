@@ -2,7 +2,7 @@
  * ThinkBank - Header Component
  */
 
-import { Upload, Images, Search } from 'lucide-react';
+import { Upload, Images, Search, FileText, MessageSquare } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 
@@ -33,6 +33,16 @@ export function Header() {
                 <span className="hidden sm:inline">Gallery</span>
               </Button>
             </Link>
+            <Link to="/documents">
+              <Button
+                variant={isActive('/documents') ? 'secondary' : 'ghost'}
+                size="sm"
+                className="gap-2"
+              >
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Documents</span>
+              </Button>
+            </Link>
             <Link to="/upload">
               <Button
                 variant={isActive('/upload') ? 'secondary' : 'ghost'}
@@ -53,9 +63,20 @@ export function Header() {
                 <span className="hidden sm:inline">Search</span>
               </Button>
             </Link>
+            <Link to="/chat">
+              <Button
+                variant={isActive('/chat') ? 'secondary' : 'ghost'}
+                size="sm"
+                className="gap-2"
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span className="hidden sm:inline">Chat</span>
+              </Button>
+            </Link>
           </nav>
         </div>
       </div>
     </header>
   );
 }
+

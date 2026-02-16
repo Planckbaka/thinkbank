@@ -80,7 +80,7 @@ type llmChatResponse struct {
 	} `json:"choices"`
 }
 
-// Search provides character-level retrieval over processed assets for Chinese/English mixed input.
+// Search provides hybrid vector + character retrieval over processed assets.
 func Search(ctx context.Context, c *app.RequestContext) {
 	query := strings.TrimSpace(c.Query("q"))
 	limit := parseIntWithDefault(c.Query("limit"), 20)
@@ -99,7 +99,7 @@ func Search(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
-// Chat performs lightweight RAG using character-level retrieval and external LLM synthesis.
+// Chat performs RAG using hybrid retrieval and external LLM synthesis.
 func Chat(ctx context.Context, c *app.RequestContext) {
 	var req ChatRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -157,6 +157,17 @@ func retrieveAssetsForQuery(ctx context.Context, query string, limit int, thresh
 	queryRunes := uniqueRunes(normalizedQuery)
 	hasQuery := normalizedQuery != ""
 
+	// ---------- Vector search (best-effort) ----------
+	vectorScores := make(map[string]float64) // asset_id → cosine similarity
+	if hasQuery {
+		queryVector := embedQueryText(query)
+		if queryVector != nil {
+			vectorScores = pgvectorSearch(ctx, queryVector, 100)
+		}
+	}
+	hasVectorScores := len(vectorScores) > 0
+
+	// ---------- Character + Vector hybrid ----------
 	results := make([]SearchResult, 0, len(assets))
 	for _, asset := range assets {
 		fileName := filepath.Base(asset.ObjectName)
@@ -167,15 +178,16 @@ func retrieveAssetsForQuery(ctx context.Context, query string, limit int, thresh
 			asset.ContentText,
 		}, " "))
 
-		score := 0.0
+		// Character score (0–3 range, normalized to 0–1)
+		charScore := 0.0
 		if !hasQuery {
-			score = 0.1
+			charScore = 0.1
 		} else {
 			if strings.Contains(searchText, normalizedQuery) {
-				score += 2.0
+				charScore += 2.0
 			}
 			if strings.Contains(normalizeSearchText(asset.Caption), normalizedQuery) {
-				score += 1.0
+				charScore += 1.0
 			}
 			if len(queryRunes) > 0 {
 				matchCount := 0
@@ -184,14 +196,27 @@ func retrieveAssetsForQuery(ctx context.Context, query string, limit int, thresh
 						matchCount++
 					}
 				}
-				score += float64(matchCount) / float64(len(queryRunes))
+				charScore += float64(matchCount) / float64(len(queryRunes))
 			}
 		}
+		charScoreNorm := math.Min(charScore/3.0, 1.0)
 
-		// Recency tie-break (small weight)
-		score += 0.001 * float64(time.Since(asset.CreatedAt).Hours()) * -1.0
-		score = math.Round(score*1000) / 1000
-		if hasQuery && score < threshold {
+		// Vector score (already 0–1 cosine similarity)
+		vecScore := vectorScores[asset.ID.String()]
+
+		// Hybrid score
+		var finalScore float64
+		if hasVectorScores {
+			finalScore = 0.7*vecScore + 0.3*charScoreNorm
+		} else {
+			finalScore = charScoreNorm
+		}
+
+		// Recency tie-break
+		finalScore += 0.001 * float64(time.Since(asset.CreatedAt).Hours()) * -1.0
+		finalScore = math.Round(finalScore*1000) / 1000
+
+		if hasQuery && finalScore < threshold {
 			continue
 		}
 
@@ -208,7 +233,7 @@ func retrieveAssetsForQuery(ctx context.Context, query string, limit int, thresh
 			Caption:          asset.Caption,
 			ContentPreview:   previewText(asset.ContentText, 240),
 			ProcessingStatus: asset.ProcessingStatus,
-			Score:            score,
+			Score:            finalScore,
 			URL:              url,
 			CreatedAt:        asset.CreatedAt,
 		})
@@ -227,10 +252,75 @@ func retrieveAssetsForQuery(ctx context.Context, query string, limit int, thresh
 	return results, nil
 }
 
+// embedQueryText calls the python-ai embed HTTP endpoint to get a 1024-dim vector.
+func embedQueryText(query string) []float64 {
+	embedURL := getEnv("AI_EMBED_URL", "http://127.0.0.1:50052") + "/api/embed"
+
+	payload, _ := json.Marshal(map[string]string{"text": query})
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(embedURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return nil // fail silently, fallback to character search
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+
+	var result struct {
+		Vector []float64 `json:"vector"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	return result.Vector
+}
+
+// pgvectorSearch runs a cosine similarity query against asset_embeddings using pgvector.
+func pgvectorSearch(ctx context.Context, queryVector []float64, limit int) map[string]float64 {
+	scores := make(map[string]float64)
+
+	// Format vector as pgvector-compatible string: [0.1,0.2,...]
+	vecParts := make([]string, len(queryVector))
+	for i, v := range queryVector {
+		vecParts[i] = strconv.FormatFloat(v, 'f', 8, 64)
+	}
+	vecStr := "[" + strings.Join(vecParts, ",") + "]"
+
+	type vectorResult struct {
+		AssetID  string  `gorm:"column:asset_id"`
+		Distance float64 `gorm:"column:distance"`
+	}
+
+	var results []vectorResult
+	err := postgres.DB.WithContext(ctx).Raw(
+		`SELECT asset_id::text, (semantic_vector <=> ?::vector) as distance
+		 FROM asset_embeddings
+		 WHERE semantic_vector IS NOT NULL
+		 ORDER BY distance ASC
+		 LIMIT ?`,
+		vecStr, limit,
+	).Scan(&results).Error
+
+	if err != nil {
+		return scores
+	}
+
+	for _, r := range results {
+		// Convert cosine distance to similarity (0–1, higher is better)
+		similarity := 1.0 - r.Distance
+		if similarity < 0 {
+			similarity = 0
+		}
+		scores[r.AssetID] = similarity
+	}
+	return scores
+}
+
 func callLLMForRAG(query string, history []ChatMessage, sources []SearchResult) (string, error) {
 	baseURL := strings.TrimRight(getEnv("LLM_API_URL", "http://127.0.0.1:8000/v1"), "/")
 	apiKey := getEnv("LLM_API_KEY", "sk-local")
-	modelName := getEnv("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4")
+	modelName := getEnv("LLM_MODEL", "Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4")
 
 	var contextBuilder strings.Builder
 	for idx, src := range sources {

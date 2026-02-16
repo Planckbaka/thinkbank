@@ -37,6 +37,7 @@ type AssetResponse struct {
 	FileName         string                 `json:"file_name"`
 	MimeType         string                 `json:"mime_type"`
 	SizeBytes        int64                  `json:"size_bytes"`
+	Category         string                 `json:"category"`
 	Caption          string                 `json:"caption,omitempty"`
 	ProcessingStatus string                 `json:"processing_status"`
 	URL              string                 `json:"url,omitempty"`
@@ -69,7 +70,8 @@ func Upload(ctx context.Context, c *app.RequestContext) {
 
 	// Validate file type
 	contentType := file.Header.Get("Content-Type")
-	if !isValidFileType(contentType) {
+	fileName := file.Filename
+	if !isValidFileType(contentType, fileName) {
 		c.JSON(consts.StatusBadRequest, errno.InvalidFileType)
 		return
 	}
@@ -96,6 +98,7 @@ func Upload(ctx context.Context, c *app.RequestContext) {
 		MimeType:         contentType,
 		SizeBytes:        file.Size,
 		ProcessingStatus: model.StatusPending,
+		Category:         "Other",
 	}
 
 	if err := postgres.DB.Create(asset).Error; err != nil {
@@ -131,6 +134,7 @@ func ListAssets(ctx context.Context, c *app.RequestContext) {
 	page := c.DefaultQuery("page", "1")
 	perPage := c.DefaultQuery("per_page", "20")
 	status := c.Query("status")
+	category := c.Query("category")
 	pageNum, perPageNum := parsePagination(page, perPage)
 
 	var assets []model.Asset
@@ -140,6 +144,10 @@ func ListAssets(ctx context.Context, c *app.RequestContext) {
 
 	if status != "" {
 		query = query.Where("processing_status = ?", status)
+	}
+
+	if category != "" {
+		query = query.Where("category = ?", category)
 	}
 
 	// Get total count
@@ -168,6 +176,7 @@ func ListAssets(ctx context.Context, c *app.RequestContext) {
 			FileName:         filepath.Base(asset.ObjectName),
 			MimeType:         asset.MimeType,
 			SizeBytes:        asset.SizeBytes,
+			Category:         asset.Category,
 			Caption:          asset.Caption,
 			ProcessingStatus: asset.ProcessingStatus,
 			URL:              url,
@@ -240,7 +249,7 @@ func DeleteAsset(ctx context.Context, c *app.RequestContext) {
 
 // Helper functions
 
-func isValidFileType(contentType string) bool {
+func isValidFileType(contentType, fileName string) bool {
 	validTypes := []string{
 		"image/jpeg",
 		"image/png",
@@ -251,11 +260,29 @@ func isValidFileType(contentType string) bool {
 		"application/json",
 		"text/markdown",
 	}
+
 	for _, t := range validTypes {
 		if strings.HasPrefix(contentType, t) {
 			return true
 		}
 	}
+
+	// Fallback: Check extension for Markdown
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if ext == ".md" || ext == ".markdown" {
+		return true
+	}
+
+	// Fallback: Check extension for Text
+	if ext == ".txt" {
+		return true
+	}
+
+	// Fallback for generic binary/text types if we want to be lenient
+	if contentType == "application/octet-stream" || strings.HasPrefix(contentType, "text/") {
+		return true
+	}
+
 	return false
 }
 

@@ -19,20 +19,27 @@ export HF_HOME
 export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
 export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
 
-LLM_MODEL="${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4}"
+LLM_MODEL="${LLM_MODEL:-${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4}}"
 LLM_HOST="${LLM_HOST:-0.0.0.0}"
 LLM_PORT="${LLM_PORT:-8000}"
 LLM_API_KEY="${LLM_API_KEY:-sk-local}"
-VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.92}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-1024}"
 VLLM_DTYPE="${VLLM_DTYPE:-float16}"
-VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-32}"
-VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-1024}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-8}"
+VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-256}"
+ALLOC_CONF_VALUE="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
+export PYTORCH_ALLOC_CONF="${ALLOC_CONF_VALUE}"
+# Backward-compatible alias for environments still reading old variable name.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-${ALLOC_CONF_VALUE}}"
 
 echo "Starting vLLM on ${LLM_HOST}:${LLM_PORT}"
 echo "Model: ${LLM_MODEL}"
 echo "HF cache: ${HF_HOME}"
+echo "gpu_memory_utilization: ${VLLM_GPU_MEMORY_UTILIZATION}"
+echo "max_model_len: ${VLLM_MAX_MODEL_LEN}"
+echo "max_num_seqs: ${VLLM_MAX_NUM_SEQS}"
+echo "max_num_batched_tokens: ${VLLM_MAX_NUM_BATCHED_TOKENS}"
 
 PYTHON_BIN="python3"
 if [[ -x "${ROOT_DIR}/.venv-vllm/bin/python" ]]; then

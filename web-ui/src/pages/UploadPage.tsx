@@ -4,17 +4,19 @@
  */
 
 import { useState, useCallback } from 'react';
-import { Upload, File, Image, FileText, X, CheckCircle2, Loader2 } from 'lucide-react';
+import { Upload, File, Image, FileText, X, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { uploadFile, formatFileSize } from '@/lib/api';
+import { uploadFile, formatFileSize, getAsset } from '@/lib/api';
 
 interface UploadingFile {
   file: File;
   progress: number;
-  status: 'pending' | 'uploading' | 'success' | 'error';
+  // 'success' means fully processed, 'processing' means uploaded but AI is working
+  status: 'pending' | 'uploading' | 'processing' | 'success' | 'error';
   error?: string;
   assetId?: string;
+  processingStage?: string;
 }
 
 const ACCEPTED_TYPES = [
@@ -76,20 +78,37 @@ export function UploadPage() {
     // Update status to uploading
     setFiles((prev) =>
       prev.map((f) =>
-        f.file === file ? { ...f, status: 'uploading', progress: 25 } : f
+        f.file === file ? { ...f, status: 'uploading', progress: 0 } : f
       )
     );
 
     try {
+      // Mock progress (since fetch doesn't support progress events easily)
+      const progressInterval = setInterval(() => {
+        setFiles(prev => prev.map(f => {
+          if (f.file === file && f.status === 'uploading' && f.progress < 90) {
+            return { ...f, progress: f.progress + 10 };
+          }
+          return f;
+        }));
+      }, 200);
+
       const result = await uploadFile(file);
+      clearInterval(progressInterval);
 
       setFiles((prev) =>
         prev.map((f) =>
           f.file === file
-            ? { ...f, status: 'success', progress: 100, assetId: result.asset_id }
+            ? { ...f, status: 'processing', progress: 100, assetId: result.asset_id, processingStage: 'Queued for AI...' }
             : f
         )
       );
+
+      // Start polling for processing status
+      if (result.asset_id) {
+        pollProcessingStatus(file, result.asset_id);
+      }
+
     } catch (error) {
       setFiles((prev) =>
         prev.map((f) =>
@@ -99,6 +118,40 @@ export function UploadPage() {
         )
       );
     }
+  };
+
+  const pollProcessingStatus = async (file: File, assetId: string) => {
+    const poll = setInterval(async () => {
+      try {
+        const asset = await getAsset(assetId);
+
+        if (asset.processing_status === 'COMPLETED') {
+          clearInterval(poll);
+          setFiles(prev => prev.map(f =>
+            f.file === file
+              ? { ...f, status: 'success', processingStage: 'Completed' }
+              : f
+          ));
+        } else if (asset.processing_status === 'FAILED') {
+          clearInterval(poll);
+          setFiles(prev => prev.map(f =>
+            f.file === file
+              ? { ...f, status: 'error', error: 'AI Processing Failed' }
+              : f
+          ));
+        } else {
+          // Still processing
+          setFiles(prev => prev.map(f =>
+            f.file === file
+              ? { ...f, processingStage: `Processing: ${asset.processing_status}` }
+              : f
+          ));
+        }
+      } catch (e) {
+        console.error("Failed to poll asset", e);
+        // Don't stop polling on transient errors, but maybe limit retries in real app
+      }
+    }, 2000); // Poll every 2 seconds
   };
 
   const removeFile = (file: File) => {
@@ -111,7 +164,7 @@ export function UploadPage() {
     return File;
   };
 
-  const pendingCount = files.filter((f) => f.status === 'pending' || f.status === 'uploading').length;
+  const pendingCount = files.filter((f) => f.status === 'pending' || f.status === 'uploading' || f.status === 'processing').length;
   const successCount = files.filter((f) => f.status === 'success').length;
 
   return (
@@ -123,13 +176,12 @@ export function UploadPage() {
         </p>
       </div>
 
-      {/* Drop Zone - Bento Grid Item 1 */}
+      {/* Drop Zone */}
       <Card
-        className={`mx-auto w-full border-2 border-dashed transition-colors cursor-pointer ${
-          isDragging
-            ? 'border-primary bg-primary/5'
-            : 'border-muted-foreground/25 hover:border-primary/50'
-        }`}
+        className={`mx-auto w-full border-2 border-dashed transition-colors cursor-pointer ${isDragging
+          ? 'border-primary bg-primary/5'
+          : 'border-muted-foreground/25 hover:border-primary/50'
+          }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -157,14 +209,14 @@ export function UploadPage() {
         </CardContent>
       </Card>
 
-      {/* File Queue - Bento Grid Item 2 */}
+      {/* File Queue */}
       {files.length > 0 && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-medium">Upload Queue</h2>
             <p className="text-sm text-muted-foreground">
-              {successCount} of {files.length} uploaded
-              {pendingCount > 0 && ` (${pendingCount} in progress)`}
+              {successCount} of {files.length} processed
+              {pendingCount > 0 && ` (${pendingCount} active)`}
             </p>
           </div>
 
@@ -190,13 +242,20 @@ export function UploadPage() {
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{uf.file.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-medium">{uf.file.name}</p>
+                        {uf.status === 'processing' && (
+                          <span className="text-xs text-blue-500 bg-blue-50 px-2 py-0.5 rounded-full animate-pulse">
+                            {uf.processingStage || 'Processing...'}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-muted-foreground">
                         {formatFileSize(uf.file.size)}
                       </p>
 
                       {/* Progress Bar */}
-                      {uf.status === 'uploading' && (
+                      {(uf.status === 'uploading') && (
                         <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
                           <div
                             className="h-full bg-primary transition-all duration-300"
@@ -206,12 +265,15 @@ export function UploadPage() {
                       )}
 
                       {uf.status === 'error' && (
-                        <p className="mt-1 text-sm text-destructive">{uf.error}</p>
+                        <p className="mt-1 text-sm text-destructive flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" />
+                          {uf.error}
+                        </p>
                       )}
                     </div>
 
                     <div className="flex-shrink-0">
-                      {uf.status === 'uploading' && (
+                      {(uf.status === 'uploading' || uf.status === 'processing') && (
                         <Loader2 className="h-5 w-5 animate-spin text-primary" />
                       )}
                       {uf.status === 'success' && (
@@ -222,6 +284,17 @@ export function UploadPage() {
                           variant="ghost"
                           size="icon"
                           onClick={() => removeFile(uf.file)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {/* Allow clearing successful items too to declutter */}
+                      {uf.status === 'success' && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeFile(uf.file)}
+                          className="opacity-50 hover:opacity-100"
                         >
                           <X className="h-4 w-4" />
                         </Button>
