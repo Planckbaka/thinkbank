@@ -1,0 +1,387 @@
+openapi: 3.0.3
+info:
+  title: ThinkBank API
+  description: |
+    ThinkBank is a self-hosted, privacy-first intelligent personal data asset management system.
+
+    ## Features
+    - **Asset Management**: Upload, store, and manage images and documents
+    - **AI Processing**: Automatic tagging, OCR, and vectorization
+    - **Semantic Search**: Find assets using natural language queries
+    - **RAG Chat**: Conversational interface to query your knowledge base
+
+    ## Authentication
+    Currently, the API does not require authentication. This will be added in future versions.
+
+    ## Error Handling
+    All errors follow a consistent format. See [error-codes.md](./error-codes.md) for details.
+  version: 1.0.0
+  contact:
+    name: ThinkBank Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: http://api.thinkbank.local
+    description: Production server (example)
+
+tags:
+  - name: Health
+    description: System health check endpoints
+  - name: Assets
+    description: Asset upload and management
+  - name: AI
+    description: AI service status
+
+paths:
+  /ping:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns a simple pong response to verify the server is running
+      operationId: ping
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: pong
+
+  /api/v1/assets/upload:
+    post:
+      tags:
+        - Assets
+      summary: Upload a file
+      description: |
+        Upload a file to the system. The file will be:
+        1. Stored in MinIO object storage
+        2. Added to the database with PENDING status
+        3. Queued for AI processing (OCR, captioning, embedding)
+
+        **Supported file types:**
+        - Images: JPEG, PNG, GIF, WebP
+        - Documents: PDF, Plain text, JSON, Markdown
+
+        **Max file size:** 100MB
+      operationId: uploadAsset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Bad request (invalid file type, file too large, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/assets:
+    get:
+      tags:
+        - Assets
+      summary: List assets
+      description: Retrieve a paginated list of assets with optional filtering by processing status
+      operationId: listAssets
+      parameters:
+        - name: page
+          in: query
+          description: Page number (1-indexed)
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: per_page
+          in: query
+          description: Number of items per page (max 100)
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: status
+          in: query
+          description: Filter by processing status
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - PROCESSING
+              - COMPLETED
+              - FAILED
+      responses:
+        '200':
+          description: List of assets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetListResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/assets/{id}:
+    get:
+      tags:
+        - Assets
+      summary: Get asset by ID
+      description: Retrieve a single asset by its UUID, including a presigned download URL
+      operationId: getAsset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Asset UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Asset details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetResponse'
+        '404':
+          description: Asset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Assets
+      summary: Delete an asset
+      description: |
+        Delete an asset from the system. This will:
+        1. Remove the file from MinIO storage
+        2. Soft-delete the database record
+        3. Cascade delete related embeddings and processing tasks
+      operationId: deleteAsset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Asset UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Asset deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Asset deleted successfully
+        '404':
+          description: Asset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/ai/health:
+    get:
+      tags:
+        - AI
+      summary: AI service health check
+      description: Check if the AI processing service (Python gRPC) is available and healthy
+      operationId: aiHealth
+      responses:
+        '200':
+          description: AI service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - healthy
+                      - unhealthy
+                    example: healthy
+                  models_loaded:
+                    type: boolean
+                    example: true
+                  grpc_endpoint:
+                    type: string
+                    example: localhost:50051
+        '503':
+          description: AI service is unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unhealthy
+                  error:
+                    type: string
+                    example: gRPC connection refused
+
+components:
+  schemas:
+    UploadResponse:
+      type: object
+      required:
+        - asset_id
+        - message
+      properties:
+        asset_id:
+          type: string
+          format: uuid
+          description: UUID of the uploaded asset
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        message:
+          type: string
+          description: Success message
+          example: "File uploaded successfully"
+
+    AssetResponse:
+      type: object
+      required:
+        - id
+        - file_name
+        - mime_type
+        - size_bytes
+        - processing_status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique asset identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        file_name:
+          type: string
+          description: Original file name
+          example: "photo.jpg"
+        mime_type:
+          type: string
+          description: MIME type of the file
+          example: "image/jpeg"
+        size_bytes:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 1048576
+        caption:
+          type: string
+          description: AI-generated caption or summary
+          example: "A sunset over the ocean with orange clouds"
+        processing_status:
+          type: string
+          enum:
+            - PENDING
+            - PROCESSING
+            - COMPLETED
+            - FAILED
+          description: Current processing status
+        url:
+          type: string
+          format: uri
+          description: Presigned download URL (valid for 1 hour)
+          example: "https://minio.example.com/bucket/path?signature=..."
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata (EXIF, dimensions, etc.)
+          example:
+            width: 1920
+            height: 1080
+            camera: "iPhone 14 Pro"
+        created_at:
+          type: string
+          format: date-time
+          description: Upload timestamp
+          example: "2024-01-15T10:30:00Z"
+
+    AssetListResponse:
+      type: object
+      required:
+        - assets
+        - total
+        - page
+        - per_page
+      properties:
+        assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetResponse'
+        total:
+          type: integer
+          format: int64
+          description: Total number of assets matching the query
+          example: 150
+        page:
+          type: integer
+          description: Current page number
+          example: 1
+        per_page:
+          type: integer
+          description: Number of items per page
+          example: 20
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code for programmatic handling
+          example: "ASSET_NOT_FOUND"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "The requested asset was not found"
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details (optional)

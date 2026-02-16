@@ -2,172 +2,192 @@
 ## Product Requirement Document (PRD)
 
 ### 1. Project Overview
-**ThinkBank** is a self-hosted, privacy-first personal data management system. It serves as a "Smart Gallery" and "Second Brain," utilizing local AI models to organize, analyze, and retrieve personal digital assets (photos, documents).
+**ThinkBank** is a self-hosted, privacy-first personal data management system. It acts as a smart gallery and second brain for images/documents, with local AI processing and searchable knowledge retrieval.
 
-**Core Philosophy:**
-* **Data Sovereignty:** All data stays local.
-* **Smart Ingestion:** Automated tagging, OCR, and vectorization upon upload.
-* **Natural Interaction:** Chat with your data using RAG (Retrieval-Augmented Generation).
-
-### 2. Technology Stack & Constraints
-
-#### 2.1 Backend (Core Service)
-* **Language:** Golang (1.23+)
-* **Framework:** Hertz (High-performance HTTP framework)
-* **Communication:**
-    * External: RESTful API (HTTP/2)
-    * Internal (to AI Service): gRPC (Protobuf)
-
-#### 2.2 AI Service (Intelligence Layer)
-* **Language:** Python 3.11+
-* **Orchestration:** LangChain
-* **Inference Engine:** vLLM (with `gpu_memory_utilization` limits)
-* **Models (Optimized for RTX 4070 8GB VRAM):**
-    * **LLM:** `Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4` (GPU Dedicated)
-    * **Vision Captioning:** `HuggingFaceTB/SmolVLM-Instruct` (CPU/Offload)
-    * **Image Embedding:** `google/siglip-so400m-patch14-384` (CPU)
-    * **Text Embedding:** `BAAI/bge-m3` (CPU)
-* **Document Parsing:** `Docling` or `Marker` (PDF to Markdown)
-
-#### 2.3 Database & Storage
-* **Relational & Vector DB:** PostgreSQL 16 + `pgvector` extension.
-* **Object Storage:** MinIO (S3 Compatible) for raw files and thumbnails.
-* **Cache & Queue:** Redis 7 (for async task queues).
-
-#### 2.4 Frontend
-* **Framework:** React 19 + Vite
-* **UI Library:** shadcn/ui + Tailwind CSS
-* **State Management:** Zustand / TanStack Query
-
-#### 2.5 Infrastructure
-* **Deployment:** Docker Compose (Full stack)
+**Core Goals**
+- Data stays local (object storage + metadata + vectors are self-hosted).
+- Uploaded assets are asynchronously parsed/captioned/vectorized.
+- Users can perform character-based retrieval (Chinese/English mixed) and RAG chat across images/documents.
 
 ---
 
-### 3. System Architecture & Workflows
+### 2. Current Deployment Mode (Actual Running State)
 
-#### 3.1 Architecture Diagram
+#### 2.1 Hybrid Deployment (Current Recommended)
+- **Docker (infrastructure only):**
+  - PostgreSQL + pgvector
+  - Redis
+  - MinIO
+- **Host machine (application services):**
+  - vLLM (OpenAI-compatible API)
+  - python-ai gRPC service
+  - python-ai Redis worker
+  - go-backend (Hertz API gateway)
+  - web-ui (Vite + React)
+
+This mode is required for current environment constraints and GPU stability.
+
+#### 2.2 Resource Scheduling Strategy (RTX 4070 8GB)
+- **GPU exclusive:** only vLLM uses GPU.
+- **CPU split:** python-ai embeddings/vision/doc parsing run on CPU.
+- **Service contract:**
+  - `LLM_API_URL=http://127.0.0.1:8000/v1`
+  - `LLM_API_KEY=sk-local`
+
+---
+
+### 3. Technology Stack
+
+#### 3.1 Backend (Gateway)
+- Language: Go (Hertz)
+- Protocols:
+  - External: REST API
+  - Internal to AI: gRPC (python-ai)
+
+#### 3.2 AI Layer
+- Language: Python 3.11+
+- LLM client: `langchain-openai` (OpenAI-compatible HTTP)
+- Inference server: host vLLM
+- Embedding/CV runtime: CPU only (`device='cpu'`)
+- Main models:
+  - LLM: `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` (vLLM)
+  - Text embedding: `BAAI/bge-m3`
+  - Image caption / vision: current configured vision model in `python-ai/core/vision.py`
+
+#### 3.3 Data Layer
+- PostgreSQL 16 + pgvector
+- Redis 7
+- MinIO (S3 compatible)
+
+#### 3.4 Frontend
+- React + Vite + Tailwind + shadcn/ui
+
+---
+
+### 4. System Architecture
+
 ```mermaid
 graph TD
-    User[Web Client] -->|HTTP/REST| GoAPI[Go Backend (Hertz)]
-    
-    subgraph "Data Layer"
-        GoAPI -->|Metadata| PG[(PostgreSQL + pgvector)]
-        GoAPI -->|File Stream| MinIO[MinIO Storage]
-        GoAPI -->|Async Task| Redis[Redis Queue]
-    end
-    
-    subgraph "AI Service (Python)"
-        PyWorker[Task Consumer] -->|Pop Task| Redis
-        PyWorker -->|Read File| MinIO
-        PyWorker -->|Write Vector| PG
-        
-        GoAPI -.->|gRPC (Real-time Chat)| PyService[Inference Service]
-        PyService -->|Load| vLLM[vLLM Engine]
+    User[Web UI on Host] -->|HTTP| GoAPI[Go Backend on Host]
+
+    subgraph Docker Infra
+      PG[(PostgreSQL + pgvector)]
+      Redis[(Redis)]
+      MinIO[(MinIO)]
     end
 
-```
+    subgraph Host App Services
+      PyGRPC[python-ai gRPC]
+      PyWorker[python-ai Redis Worker]
+      vLLM[vLLM OpenAI API]
+    end
 
-#### 3.2 Key Workflows
+    GoAPI --> PG
+    GoAPI --> MinIO
+    GoAPI --> Redis
+    GoAPI -->|health / grpc reachability| PyGRPC
 
-1. **Ingestion Pipeline (Async):**
-* Upload -> Save to MinIO -> Create DB Record (Pending) -> Push ID to Redis.
-* Python Worker -> Pop ID -> Download File -> (If Image: Caption + Embedding) / (If Doc: Parse + Embedding) -> Update DB.
+    PyWorker --> Redis
+    PyWorker --> MinIO
+    PyWorker --> PG
+    PyWorker -->|LLM HTTP| vLLM
 
-
-2. **RAG Search (Sync):**
-* User Query -> Go API -> Python gRPC -> Embed Query -> Vector Search (PG) -> LLM Synthesis -> Return Response.
-
-
-
----
-
-### 4. Database Schema (PostgreSQL)
-
-#### 4.1 Table: `assets`
-
-Core metadata storage.
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE assets (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    bucket_name VARCHAR(64) NOT NULL,
-    object_name VARCHAR(255) NOT NULL,
-    mime_type VARCHAR(127) NOT NULL,
-    size_bytes BIGINT NOT NULL,
-    caption TEXT,          -- AI description or Doc summary
-    content_text TEXT,     -- Full OCR/Doc text
-    metadata JSONB DEFAULT '{}', -- EXIF, dimensions
-    processing_status VARCHAR(32) DEFAULT 'PENDING',
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-```
-
-#### 4.2 Table: `asset_embeddings`
-
-Separated for performance.
-
-```sql
-CREATE TABLE asset_embeddings (
-    asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
-    semantic_vector vector(1024), -- BGE-M3
-    visual_vector vector(1152),   -- SigLIP
-    PRIMARY KEY (asset_id)
-);
-CREATE INDEX ON asset_embeddings USING ivfflat (semantic_vector vector_cosine_ops);
-
+    GoAPI -->|RAG chat call| vLLM
 ```
 
 ---
 
-### 5. API Specification (Internal & External)
+### 5. Key Workflows
 
-#### 5.1 gRPC Definition (`proto/ai_service.proto`)
+#### 5.1 Asset Ingestion (Async)
+1. Upload file to `/api/v1/assets/upload`.
+2. Backend writes object to MinIO and metadata to PostgreSQL.
+3. Backend pushes task ID to Redis queue.
+4. `python-ai` worker consumes task:
+   - image: generate caption + embeddings
+   - document/text: extract content + semantic embedding
+5. Worker writes caption/content/embedding and marks status (`COMPLETED` / `FAILED`).
 
-```protobuf
-syntax = "proto3";
-package ai_service;
+#### 5.2 Character-Based Retrieval
+1. User inputs query in Search page.
+2. Frontend calls `GET /api/v1/search?q=...`.
+3. Backend performs character-level matching/scoring over filename, mime, caption, content text.
+4. Backend returns ranked results and presigned MinIO URLs.
 
-service AiWorker {
-  // Trigger analysis manually or check status
-  rpc ProcessAsset (AssetRequest) returns (ProcessStatus);
-  // RAG Chat Stream
-  rpc ChatStream (ChatRequest) returns (stream ChatResponse);
-}
-
-message AssetRequest { string asset_id = 1; string file_path = 2; string mime_type = 3; }
-message ChatRequest { string query = 1; repeated string history = 2; }
-message ChatResponse { string chunk = 1; }
-message ProcessStatus { bool success = 1; string error = 2; }
-
-```
-
-#### 5.2 Go REST API
-
-* `POST /api/v1/assets/upload` - Multipart upload.
-* `GET /api/v1/assets` - List with pagination.
-* `GET /api/v1/search?q={text}&type={semantic|visual}` - Vector search.
-* `POST /api/v1/chat` - Interactive chat endpoint.
+#### 5.3 RAG Chat (Image + Document Context)
+1. User sends message to `POST /api/v1/chat`.
+2. Backend retrieves top-K relevant assets via character retrieval.
+3. Backend assembles context (caption/content preview/file metadata).
+4. Backend calls host vLLM OpenAI API to synthesize answer.
+5. Response returns `answer + sources` (source files for traceability).
 
 ---
 
-### 6. Project Directory Structure
+### 6. Database Schema (Current)
 
-```
+#### 6.1 `assets`
+- `id` (UUID)
+- `bucket_name`
+- `object_name`
+- `mime_type`
+- `size_bytes`
+- `caption`
+- `content_text`
+- `metadata` (JSONB)
+- `processing_status` (`PENDING|PROCESSING|COMPLETED|FAILED`)
+- `created_at`, `updated_at`
+
+#### 6.2 `asset_embeddings`
+- `asset_id` (PK/FK)
+- `semantic_vector` (vector)
+- `visual_vector` (vector)
+
+#### 6.3 `processing_tasks`
+- status/stage/progress/error tracking for async pipeline
+
+---
+
+### 7. API Specification (Implemented)
+
+#### 7.1 Asset APIs
+- `POST /api/v1/assets/upload`
+- `GET /api/v1/assets`
+- `GET /api/v1/assets/:id`
+- `DELETE /api/v1/assets/:id`
+
+#### 7.2 AI Health API
+- `GET /api/v1/ai/health`
+- Returns:
+  - `available` (python-ai gRPC availability)
+  - `llm_available`
+  - `llm_url`
+  - `llm_message`
+
+#### 7.3 Retrieval + RAG APIs
+- `GET /api/v1/search?q={text}&limit={n}&threshold={f}`
+- `POST /api/v1/chat`
+  - request: `{ query, history, top_k }`
+  - response: `{ answer, sources[] }`
+
+---
+
+### 8. Non-Goals / Deferred
+- Full multi-modal vector nearest-neighbor endpoint is not yet exposed as dedicated public REST API.
+- Streaming chat response is not yet enabled in current REST `/chat` implementation.
+
+---
+
+### 9. Project Structure
+
+```text
 thinkbank/
-├── go-backend/         # Hertz App
-│   ├── biz/            # Business Logic
-│   ├── cmd/            # Main entry
-│   ├── conf/           # Config files
-│   └── idl/            # Protobuf definitions
-├── python-ai/          # AI Service
-│   ├── core/           # Model loaders (vLLM, Embeddings)
-│   ├── workers/        # Redis consumers
-│   └── server.py       # gRPC Server
-├── web-ui/             # React App
-├── docker-compose.yml
+├── docker-compose.yml          # Infra services (postgres/redis/minio)
+├── start-infra.sh              # Start Docker infra only
+├── start-host-app.sh           # Start host app services
+├── go-backend/                 # Go API gateway
+├── python-ai/                  # gRPC service + worker
+├── web-ui/                     # Frontend
+├── check_arch.py               # Runtime architecture check
 └── PRD.md
+```
 

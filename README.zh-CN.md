@@ -31,7 +31,13 @@ thinkbank/
 ├── init-db/
 ├── go-backend/
 ├── python-ai/
-└── web-ui/
+├── web-ui/
+├── start-infra.sh
+├── run-backend-host.sh
+├── run-ai-host.sh
+├── run-ai-worker-host.sh
+├── run-vllm-host.sh
+└── run-web-host.sh
 ```
 
 ## 环境要求
@@ -42,108 +48,83 @@ thinkbank/
 - Python 3.11+
 - 可选：NVIDIA GPU + NVIDIA Container Toolkit（AI 容器模式）
 
-## 快速开始（推荐：本地开发模式）
+## 部署方案
 
-### 1) 克隆并准备环境变量
+ThinkBank 提供两套部署方案。
+
+### 方案 A：混合部署（基础设施在 Docker，应用在主机）
+
+这套方案对应你的目标：
+- Docker：PostgreSQL + Redis + MinIO
+- 主机：Go 后端 + Python AI gRPC + Python AI Worker + vLLM + web-ui
+
+1. 准备环境变量：
 
 ```bash
-git clone <your-repo-url> thinkbank
-cd thinkbank
 cp .env.example .env
 ```
 
-### 2) 启动基础设施（Postgres / Redis / MinIO）
+2. 启动 Docker 基础设施：
 
 ```bash
-docker compose up -d postgres redis minio
-docker compose ps
+./start-infra.sh
 ```
 
-如果你的 Docker 需要 sudo，请在命令前加 `sudo`。
-
-健康检查：
+3. 在主机启动 vLLM：
 
 ```bash
-curl -i http://localhost:9000/minio/health/live
+python3 -m venv .venv-vllm
+source .venv-vllm/bin/activate
+pip install vllm
+./run-vllm-host.sh
 ```
 
-预期：返回 `HTTP/1.1 200 OK`。
-
-### 3) 启动 Go 后端
+4. 在主机启动 Python AI gRPC 服务（新终端）：
 
 ```bash
-cd go-backend
-env -u GOROOT go mod tidy
-env -u GOROOT go run .
+./run-ai-host.sh
 ```
 
-后端默认地址：`http://localhost:8080`
-
-健康检查：
+5. 在主机启动 Python AI Worker（新终端）：
 
 ```bash
-curl -i http://localhost:8080/ping
+./run-ai-worker-host.sh
 ```
 
-预期：`{"message":"pong"}`。
+6. 在主机启动 Go 后端（新终端）：
 
-### 4) 启动前端
+```bash
+./run-backend-host.sh
+```
 
-新开一个终端：
+7. 在主机启动前端（新终端）：
 
 ```bash
 cd web-ui
 npm ci
-npm run dev -- --host 0.0.0.0 --port 5173
+cd ..
+./run-web-host.sh
 ```
 
-前端地址：`http://localhost:5173`
-
-### 5) 可选：启动 AI 服务（本地 Python 模式）
-
-新开一个终端：
+8. 验证：
 
 ```bash
-cd python-ai
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python server.py
+curl -i http://localhost:8080/ping
+curl -i http://localhost:8080/api/v1/ai/health
+curl -i http://localhost:8000/v1/models -H "Authorization: Bearer sk-local"
 ```
 
-如需后台 worker，再开一个终端：
+### 方案 B：全容器部署（Compose 启动全部服务）
 
 ```bash
-cd python-ai
-source .venv/bin/activate
-python worker.py
-```
-
-## 容器化启动（推荐分层）
-
-先只启动基础设施：
-
-```bash
-docker compose up -d postgres redis minio
-```
-
-再启动后端与前端容器：
-
-```bash
-docker compose --profile app up -d go-backend web-ui
-```
-
-按需启动 AI 容器：
-
-```bash
-docker compose --profile app up -d ai-service
+cp .env.example .env
+docker compose --profile app up -d
+docker compose --profile app ps
 ```
 
 说明：
-
-- `ai-service` 依赖较重，首次构建会很久（下载 vLLM/torch/docling）。
-- 没有 GPU 或未安装 NVIDIA Container Toolkit 时，`ai-service` 可能无法正常运行。
-- 建议先确认前后端主链路可用，再单独引入 AI 服务。
+- `llm-engine` 需要 NVIDIA runtime（`nvidia` container runtime / NVIDIA Container Toolkit）。
+- `ai-service` 首次构建依赖大，耗时较长。
 
 ## API 端点
 
@@ -154,6 +135,9 @@ docker compose --profile app up -d ai-service
 | `GET` | `/api/v1/assets` | 获取资产列表 |
 | `GET` | `/api/v1/assets/:id` | 获取单个资产 |
 | `DELETE` | `/api/v1/assets/:id` | 删除资产 |
+| `GET` | `/api/v1/ai/health` | 检查 AI 与 LLM 可用性 |
+| `GET` | `/api/v1/search?q=&limit=&threshold=` | 基于文件名/描述/内容的字符检索 |
+| `POST` | `/api/v1/chat` | RAG 问答（返回 `answer` 和 `sources`） |
 
 ## 关键环境变量
 
@@ -175,12 +159,21 @@ MINIO_CONSOLE_PORT=9001
 BACKEND_PORT=8080
 WEB_PORT=5173
 AI_GRPC_PORT=50051
+LLM_PORT=8000
 
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DB_AUTO_MIGRATE=true
+
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
+LLM_API_KEY=sk-local
+VLLM_GPU_MEMORY_UTILIZATION=0.85
+VLLM_MAX_MODEL_LEN=8192
+VLLM_MAX_NUM_SEQS=32
+VLLM_MAX_NUM_BATCHED_TOKENS=1024
+VLLM_DTYPE=float16
 ```
 
-后端本地运行读取以下变量（未设置时有默认值）：
+主机模式下，`run-backend-host.sh` 会按 `.env` 自动映射这些变量：
 
 ```env
 DB_HOST=localhost
@@ -195,8 +188,9 @@ REDIS_PORT=6379
 MINIO_ENDPOINT=localhost:9000
 MINIO_USER=minioadmin
 MINIO_PASSWORD=minioadmin123
-MINIO_BUCKET=thinkbank-assets
 
+AI_SERVICE_HOST=127.0.0.1
+AI_SERVICE_PORT=50051
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DB_AUTO_MIGRATE=true
 ```
@@ -261,20 +255,19 @@ docker compose logs redis --tail=50
 docker compose logs minio --tail=50
 ```
 
-### 5) AI 容器启动慢或模型未加载
+### 5) `llm-engine` 报 NVIDIA runtime 错误
 
-- 首次构建下载非常大，耐心等待
-- 先检查 GPU：
+报错示例：`could not select device driver "nvidia" with capabilities: [[gpu]]`
 
-```bash
-nvidia-smi
-```
-
-- 再看 AI 日志：
+检查 runtime：
 
 ```bash
-docker compose --profile app logs ai-service --tail=100
+docker info | rg -i nvidia
 ```
+
+若没有 `nvidia` runtime：
+- 安装 NVIDIA Container Toolkit 并重启 Docker，或
+- 切到方案 A，直接在主机运行 `./run-vllm-host.sh`。
 
 ## 停止服务
 
@@ -287,6 +280,12 @@ docker compose down -v
 ```
 
 若你是本地 `go run` / `npm run dev` 启动，请在对应终端中 `Ctrl+C` 停止。
+
+若你通过 `./start-host-app.sh` 后台启动主机模式服务，可用：
+
+```bash
+./stop-host-app.sh
+```
 
 ## 许可证
 

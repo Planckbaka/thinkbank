@@ -1,10 +1,12 @@
 # ThinkBank
 
-[简体中文](./README.zh-CN.md)
+[简体中文](./README.zh-CN.md) | [Documentation](./docs/README.md)
 
 > Intelligent personal data asset management system - self-hosted, privacy-first smart gallery and second brain.
 
 ThinkBank is a local-first personal data management system. It uses local AI models to organize, analyze, and retrieve personal digital assets (images and documents).
+
+**[View Full Documentation](./docs/README.md)** - API specs, architecture diagrams, deployment guides, and more.
 
 ## Core Features
 
@@ -31,7 +33,15 @@ thinkbank/
 ├── init-db/
 ├── go-backend/
 ├── python-ai/
-└── web-ui/
+├── web-ui/
+├── start-infra.sh
+├── run-backend-host.sh
+├── run-ai-host.sh
+├── run-ai-worker-host.sh
+├── run-vllm-host.sh
+├── run-web-host.sh
+├── start-host-app.sh
+└── stop-host-app.sh
 ```
 
 ## Prerequisites
@@ -40,110 +50,103 @@ thinkbank/
 - Go 1.25+
 - Node.js 20+
 - Python 3.11+
+- `python3`, `pip`, and `virtualenv` available on host
 - Optional: NVIDIA GPU + NVIDIA Container Toolkit (for AI container mode)
 
-## Quick Start (Recommended: Local Dev Mode)
+## Deployment Modes
 
-### 1. Clone and prepare env file
+ThinkBank supports two deployment modes.
+
+### Mode A: Hybrid (Infra in Docker, App Services on Host)
+
+This mode matches your target workflow:
+- In Docker: PostgreSQL + Redis + MinIO
+- On host: Go backend + Python AI service + Python AI worker + vLLM + web-ui
+
+1. Prepare env file:
 
 ```bash
-git clone <your-repo-url> thinkbank
-cd thinkbank
 cp .env.example .env
 ```
 
-### 2. Start infrastructure (Postgres / Redis / MinIO)
+2. Start infrastructure in Docker:
 
 ```bash
-docker compose up -d postgres redis minio
-docker compose ps
+./start-infra.sh
 ```
 
-If your Docker setup requires sudo, add `sudo` before those commands.
-
-Health check:
+3. Prepare Python virtual environments on host (first time only):
 
 ```bash
-curl -i http://localhost:9000/minio/health/live
+python3 -m pip install --user --break-system-packages virtualenv
+~/.local/bin/virtualenv .venv-ai
+source .venv-ai/bin/activate && pip install -r python-ai/requirements.txt && deactivate
+~/.local/bin/virtualenv .venv-vllm
+source .venv-vllm/bin/activate && pip install vllm && deactivate
 ```
 
-Expected: `HTTP/1.1 200 OK`.
-
-### 3. Start Go backend
+4. Start vLLM on host:
 
 ```bash
-cd go-backend
-env -u GOROOT go mod tidy
-env -u GOROOT go run .
+./run-vllm-host.sh
 ```
 
-Backend URL: `http://localhost:8080`
-
-Health check:
+5. Start Python AI service on host (new terminal):
 
 ```bash
-curl -i http://localhost:8080/ping
+./run-ai-host.sh
 ```
 
-Expected: `{"message":"pong"}`.
+6. Start Python AI worker on host (new terminal):
 
-### 4. Start frontend
+```bash
+./run-ai-worker-host.sh
+```
 
-Open a new terminal:
+7. Start Go backend on host (new terminal):
+
+```bash
+./run-backend-host.sh
+```
+
+8. Start web-ui on host (new terminal):
 
 ```bash
 cd web-ui
 npm ci
-npm run dev -- --host 0.0.0.0 --port 5173
+cd ..
+./run-web-host.sh
 ```
 
-Frontend URL: `http://localhost:5173`
-
-### 5. Optional: Start AI service (local Python mode)
-
-Open a new terminal:
+9. Or start all host app services in background (single command):
 
 ```bash
-cd python-ai
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python server.py
+./start-host-app.sh
 ```
 
-For worker mode, open another terminal:
+9. Verify:
 
 ```bash
-cd python-ai
-source .venv/bin/activate
-python worker.py
-```
-
-## Container Start (Layered, Recommended)
-
-Start only infrastructure first:
-
-```bash
-docker compose up -d postgres redis minio
-```
-
-Then start backend and frontend containers:
-
-```bash
-docker compose --profile app up -d go-backend web-ui
-```
-
-Start AI container only when needed:
-
-```bash
-docker compose --profile app up -d ai-service
+curl -i http://localhost:8080/ping
+curl -i http://localhost:8000/v1/models -H "Authorization: Bearer sk-local"
+ss -ltnp | grep -E ':50051|:8080|:5173|:8000'
 ```
 
 Notes:
+- Host-mode scripts use project-local HF cache at `.hf-cache/` to avoid Docker-created root-owned cache conflicts.
+- Stop host-mode app services with `./stop-host-app.sh`.
 
-- `ai-service` is heavy and first build can take a long time.
-- Without GPU or NVIDIA Container Toolkit, `ai-service` may fail to run.
-- Validate backend/frontend first, then enable AI.
+### Mode B: Full Docker (All Services in Compose)
+
+```bash
+cp .env.example .env
+docker compose --profile app up -d
+docker compose --profile app ps
+```
+
+Notes:
+- `llm-engine` needs NVIDIA runtime (`nvidia` container runtime / NVIDIA Container Toolkit).
+- `ai-service` first build is heavy and takes a long time.
 
 ## API Endpoints
 
@@ -154,6 +157,9 @@ Notes:
 | `GET` | `/api/v1/assets` | List assets |
 | `GET` | `/api/v1/assets/:id` | Get asset by ID |
 | `DELETE` | `/api/v1/assets/:id` | Delete asset |
+| `GET` | `/api/v1/ai/health` | Check AI + LLM availability |
+| `GET` | `/api/v1/search?q=&limit=&threshold=` | Character-based retrieval across filename/caption/content |
+| `POST` | `/api/v1/chat` | RAG chat, returns `answer` + `sources` |
 
 ## Key Environment Variables
 
@@ -175,12 +181,21 @@ MINIO_CONSOLE_PORT=9001
 BACKEND_PORT=8080
 WEB_PORT=5173
 AI_GRPC_PORT=50051
+LLM_PORT=8000
 
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DB_AUTO_MIGRATE=true
+
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
+LLM_API_KEY=sk-local
+VLLM_GPU_MEMORY_UTILIZATION=0.85
+VLLM_MAX_MODEL_LEN=8192
+VLLM_MAX_NUM_SEQS=32
+VLLM_MAX_NUM_BATCHED_TOKENS=1024
+VLLM_DTYPE=float16
 ```
 
-Local backend runtime variables (with defaults if missing):
+Host-run backend defaults (`run-backend-host.sh` auto maps infra ports from `.env`):
 
 ```env
 DB_HOST=localhost
@@ -195,8 +210,9 @@ REDIS_PORT=6379
 MINIO_ENDPOINT=localhost:9000
 MINIO_USER=minioadmin
 MINIO_PASSWORD=minioadmin123
-MINIO_BUCKET=thinkbank-assets
 
+AI_SERVICE_HOST=127.0.0.1
+AI_SERVICE_PORT=50051
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DB_AUTO_MIGRATE=true
 ```
@@ -261,20 +277,19 @@ docker compose logs redis --tail=50
 docker compose logs minio --tail=50
 ```
 
-### 5. AI container is slow or model not loaded
+### 5. `llm-engine` fails with NVIDIA runtime error
 
-- First build is very large, wait for completion.
-- Check GPU:
+Error example: `could not select device driver "nvidia" with capabilities: [[gpu]]`
 
-```bash
-nvidia-smi
-```
-
-- Check AI logs:
+Check runtime:
 
 ```bash
-docker compose --profile app logs ai-service --tail=100
+docker info | rg -i nvidia
 ```
+
+If no `nvidia` runtime is available:
+- Install NVIDIA Container Toolkit and restart Docker, or
+- Use Mode A (Hybrid) and run vLLM directly on host via `./run-vllm-host.sh`.
 
 ## Stop Services
 
@@ -287,6 +302,12 @@ docker compose down -v
 ```
 
 If you started local dev with `go run` or `npm run dev`, stop them with `Ctrl+C` in their terminals.
+
+If you started host-mode services in background with `./start-host-app.sh`:
+
+```bash
+./stop-host-app.sh
+```
 
 ## License
 

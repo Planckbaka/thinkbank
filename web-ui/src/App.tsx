@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from '@/components/layout/Layout';
 import { GalleryPage } from '@/pages/GalleryPage';
 import { UploadPage } from '@/pages/UploadPage';
+import { SearchPage } from '@/pages/SearchPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,6 +26,7 @@ function App() {
           <Route path="/" element={<Layout />}>
             <Route index element={<GalleryPage />} />
             <Route path="upload" element={<UploadPage />} />
+            <Route path="search" element={<SearchPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

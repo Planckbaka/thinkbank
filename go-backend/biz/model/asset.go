@@ -31,7 +31,7 @@ type Asset struct {
 type AssetEmbedding struct {
 	AssetID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"asset_id"`
 	SemanticVector []float64 `gorm:"type:vector(1024)" json:"semantic_vector"` // BGE-M3
-	VisualVector   []float64 `gorm:"type:vector(1152)" json:"visual_vector"`   // SigLIP
+	VisualVector   []float64 `gorm:"type:vector(512)" json:"visual_vector"`    // CLIP ViT-B/32
 }
 
 // ProcessingTask tracks async processing status

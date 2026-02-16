@@ -35,24 +35,28 @@ class AiWorkerServicer:
 
     def initialize_models(self):
         """Initialize models lazily."""
-        # Initialize embedding models (CPU)
+        # Initialize text embedding model (CPU). Keep service alive even if download fails.
         logger.info("Initializing embedding models...")
-        self.text_embedder = get_text_embedder()
-        self.image_embedder = get_image_embedder()
+        try:
+            self.text_embedder = get_text_embedder()
+        except Exception as e:
+            logger.warning(f"Failed to initialize text embedder: {e}")
 
-        # Initialize vision model (CPU)
-        logger.info("Initializing vision model...")
-        self.vision_model = get_vision_model()
+        # Image embedding model can take longer to download; load lazily on first image request.
+        logger.info("Image embedding model will be loaded lazily on first request")
 
-        # Initialize LLM (GPU) - optional, may fail if no GPU
+        # Vision model is heavy; load lazily on first use to keep startup fast.
+        logger.info("Vision model will be loaded lazily on first request")
+
+        # Initialize remote LLM client (served by llm-engine)
         if is_llm_available():
-            logger.info("Initializing LLM...")
+            logger.info("Initializing remote LLM client...")
             try:
                 self.llm = get_llm_service()
             except Exception as e:
                 logger.warning(f"Failed to load LLM: {e}")
         else:
-            logger.warning("LLM not available (no GPU or vLLM not installed)")
+            logger.warning("LLM client dependency is not available (langchain-openai missing)")
 
     async def ProcessAsset(self, request, context):
         """Process an asset (image or document) for AI analysis."""
@@ -121,6 +125,11 @@ class AiWorkerServicer:
 
         try:
             if request.HasField("text"):
+                if self.text_embedder is None:
+                    return ai_service_pb2.EmbeddingResponse(
+                        success=False,
+                        error="Text embedding model is not available",
+                    )
                 # Text embedding
                 embedding = self.text_embedder.embed_single(request.text)
                 return ai_service_pb2.EmbeddingResponse(
@@ -128,6 +137,19 @@ class AiWorkerServicer:
                     success=True,
                 )
             elif request.HasField("image"):
+                if self.image_embedder is None:
+                    try:
+                        self.image_embedder = get_image_embedder()
+                    except Exception as e:
+                        return ai_service_pb2.EmbeddingResponse(
+                            success=False,
+                            error=f"Image embedding model failed to load: {e}",
+                        )
+                if self.image_embedder is None:
+                    return ai_service_pb2.EmbeddingResponse(
+                        success=False,
+                        error="Image embedding model is not available",
+                    )
                 # Image embedding
                 from PIL import Image
                 import io
@@ -228,6 +250,17 @@ async def generate_protobuf():
     if result.returncode != 0:
         logger.error(f"Protobuf generation failed: {result.stderr}")
         raise RuntimeError(f"Protobuf generation failed: {result.stderr}")
+
+    # grpc_tools generates absolute imports by default; patch to package-relative import.
+    grpc_stub_path = output_dir / "ai_service_pb2_grpc.py"
+    if grpc_stub_path.exists():
+        grpc_stub = grpc_stub_path.read_text()
+        fixed_stub = grpc_stub.replace(
+            "import ai_service_pb2 as ai__service__pb2",
+            "from . import ai_service_pb2 as ai__service__pb2",
+        )
+        if fixed_stub != grpc_stub:
+            grpc_stub_path.write_text(fixed_stub)
 
     # Create __init__.py
     (output_dir / "__init__.py").touch()

@@ -51,12 +51,12 @@ class Settings(BaseSettings):
         default="BAAI/bge-m3"
     )
     image_embedding_model: str = Field(
-        default="google/siglip-so400m-patch14-384"
+        default="sentence-transformers/clip-ViT-B-32"
     )
 
     # Vision Captioning Model (CPU/Offload)
     vision_model: str = Field(
-        default="HuggingFaceTB/SmolVLM-Instruct"
+        default="Salesforce/blip-image-captioning-base"
     )
 
     # Processing

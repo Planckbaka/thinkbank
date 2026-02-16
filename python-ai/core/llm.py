@@ -1,63 +1,91 @@
 """
-ThinkBank AI Service - LLM Loader
-vLLM-based LLM loading for Qwen3-VL with GPU optimization
+ThinkBank AI Service - Remote LLM Client
+Uses an OpenAI-compatible HTTP endpoint served by vLLM.
 """
 
-import torch
-from typing import List, Optional, Iterator, AsyncIterator
+import os
+from typing import Iterator, List, Optional
+
 from loguru import logger
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from .config import settings
-
-# vLLM imports (will be available after pip install)
 try:
-    from vllm import LLM, SamplingParams
-    from vllm.engine.async_llm_engine import AsyncLLMEngine
-    VLLM_AVAILABLE = True
+    from langchain_openai import ChatOpenAI
+    LANGCHAIN_OPENAI_AVAILABLE = True
 except ImportError:
-    VLLM_AVAILABLE = False
-    logger.warning("vLLM not available. Install with: pip install vllm")
+    ChatOpenAI = None
+    LANGCHAIN_OPENAI_AVAILABLE = False
+    logger.warning("langchain-openai not available. Install with: pip install langchain-openai")
 
 
 class LLMService:
     """
-    LLM Service using vLLM for efficient inference.
-    Configured for RTX 4070 8GB VRAM with GPTQ-Int4 quantization.
+    LLM service backed by an OpenAI-compatible API endpoint.
     """
 
     def __init__(
         self,
         model_name: Optional[str] = None,
-        gpu_memory_utilization: Optional[float] = None,
+        api_url: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
-        self.model_name = model_name or settings.vllm_model
-        self.gpu_memory_utilization = gpu_memory_utilization or settings.gpu_memory_utilization
-        self.max_model_len = settings.max_model_len
-        self.engine = None
+        self.model_name = (
+            model_name
+            or os.getenv("LLM_MODEL")
+            or os.getenv("VLLM_MODEL")
+            or "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"
+        )
+        # Default to localhost for host-run mode; docker-compose overrides this to llm-engine.
+        self.api_url = api_url or os.getenv("LLM_API_URL", "http://127.0.0.1:8000/v1")
+        self.api_key = api_key or os.getenv("LLM_API_KEY", "sk-local")
+        self.client = None
         self._loaded = False
 
     def load(self) -> None:
-        """Load the LLM model with vLLM."""
+        """Initialize the remote LLM client."""
         if self._loaded:
             return
 
-        if not VLLM_AVAILABLE:
-            raise RuntimeError("vLLM is not available. Please install it first.")
+        if not LANGCHAIN_OPENAI_AVAILABLE:
+            raise RuntimeError("langchain-openai is not available. Please install it first.")
 
-        logger.info(f"Loading LLM: {self.model_name}")
-        logger.info(f"GPU Memory Utilization: {self.gpu_memory_utilization}")
-
-        self.engine = LLM(
+        logger.info(f"Initializing remote LLM client: model={self.model_name}, url={self.api_url}")
+        self.client = ChatOpenAI(
             model=self.model_name,
-            gpu_memory_utilization=self.gpu_memory_utilization,
-            max_model_len=self.max_model_len,
-            trust_remote_code=True,
-            dtype="auto",
-            # GPTQ-specific settings
-            quantization="gptq",
+            base_url=self.api_url,
+            api_key=self.api_key,
+            temperature=0.7,
         )
         self._loaded = True
-        logger.info("LLM loaded successfully")
+        logger.info("Remote LLM client initialized")
+
+    @staticmethod
+    def _to_text(content) -> str:
+        """Normalize model output content into plain text."""
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            chunks: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    chunks.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            return "".join(chunks)
+
+        return "" if content is None else str(content)
+
+    def _bound_client(self, max_tokens: int, temperature: float, top_p: float):
+        if not self._loaded:
+            self.load()
+        return self.client.bind(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
 
     def generate(
         self,
@@ -67,17 +95,9 @@ class LLMService:
         top_p: float = 0.9,
     ) -> str:
         """Generate text from a prompt."""
-        if not self._loaded:
-            self.load()
-
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-        )
-
-        outputs = self.engine.generate([prompt], sampling_params)
-        return outputs[0].outputs[0].text
+        client = self._bound_client(max_tokens=max_tokens, temperature=temperature, top_p=top_p)
+        response = client.invoke([HumanMessage(content=prompt)])
+        return self._to_text(response.content)
 
     def generate_stream(
         self,
@@ -87,16 +107,24 @@ class LLMService:
         top_p: float = 0.9,
     ) -> Iterator[str]:
         """Stream generated text from a prompt."""
-        if not self._loaded:
-            self.load()
+        client = self._bound_client(max_tokens=max_tokens, temperature=temperature, top_p=top_p)
+        has_output = False
 
-        # Note: For true streaming, use AsyncLLMEngine
-        # This is a simplified version
-        result = self.generate(prompt, max_tokens, temperature, top_p)
-        # Simulate streaming by yielding chunks
-        chunk_size = 20
-        for i in range(0, len(result), chunk_size):
-            yield result[i:i + chunk_size]
+        for chunk in client.stream([HumanMessage(content=prompt)]):
+            text = self._to_text(getattr(chunk, "content", ""))
+            if text:
+                has_output = True
+                yield text
+
+        if not has_output:
+            text = self.generate(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+            if text:
+                yield text
 
     def chat(
         self,
@@ -105,31 +133,38 @@ class LLMService:
         context: str = "",
         max_tokens: int = 512,
     ) -> str:
-        """Generate chat response with context."""
-        # Build prompt with conversation history
+        """Generate a chat response with optional context."""
         messages = []
 
-        for msg in history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "user":
-                messages.append(f"<|user|>\n{content}<|end|>")
-            else:
-                messages.append(f"<|assistant|\n{content}<|end|>")
-
-        # Add context if provided
         if context:
-            system_context = f"<|system|>\nYou are a helpful assistant with access to the following context:\n\n{context}<|end|>"
+            messages.append(
+                SystemMessage(
+                    content=(
+                        "You are a helpful assistant with access to the following context:\n\n"
+                        f"{context}"
+                    )
+                )
+            )
         else:
-            system_context = "<|system|>\nYou are a helpful assistant.<|end|>"
+            messages.append(SystemMessage(content="You are a helpful assistant."))
 
-        # Add current query
-        messages.append(f"<|user|>\n{query}<|end|>")
-        messages.append("<|assistant|")
+        for msg in history:
+            role = str(msg.get("role", "user")).lower()
+            content = self._to_text(msg.get("content", ""))
+            if not content:
+                continue
 
-        prompt = system_context + "\n" + "\n".join(messages)
+            if role in {"assistant", "ai"}:
+                messages.append(AIMessage(content=content))
+            elif role == "system":
+                messages.append(SystemMessage(content=content))
+            else:
+                messages.append(HumanMessage(content=content))
 
-        return self.generate(prompt, max_tokens=max_tokens)
+        messages.append(HumanMessage(content=query))
+        client = self._bound_client(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
+        response = client.invoke(messages)
+        return self._to_text(response.content)
 
 
 # Global instance
@@ -146,5 +181,5 @@ def get_llm_service() -> LLMService:
 
 
 def is_llm_available() -> bool:
-    """Check if LLM is available (vLLM installed and GPU available)."""
-    return VLLM_AVAILABLE and torch.cuda.is_available()
+    """Check if the remote LLM client dependencies are available."""
+    return LANGCHAIN_OPENAI_AVAILABLE

@@ -22,4 +22,14 @@ func customizedRegister(r *server.Hertz) {
 		assets.GET("/:id", handler.GetAsset)
 		assets.DELETE("/:id", handler.DeleteAsset)
 	}
+
+	// AI routes
+	ai := v1.Group("/ai")
+	{
+		ai.GET("/health", handler.AIHealth)
+	}
+
+	// RAG routes
+	v1.GET("/search", handler.Search)
+	v1.POST("/chat", handler.Chat)
 }

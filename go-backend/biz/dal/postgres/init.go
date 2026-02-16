@@ -140,11 +140,32 @@ func migrateSchema(db *gorm.DB) error {
 		CREATE TABLE IF NOT EXISTS asset_embeddings (
 			asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
 			semantic_vector vector(1024),
-			visual_vector vector(1152),
+			visual_vector vector(512),
 			PRIMARY KEY (asset_id)
 		)
 	`).Error; err != nil {
 		return err
+	}
+
+	// Ensure column dimensions match current embedding models.
+	if err := db.Exec(`ALTER TABLE asset_embeddings ALTER COLUMN semantic_vector TYPE vector(1024)`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`ALTER TABLE asset_embeddings ALTER COLUMN visual_vector TYPE vector(512)`).Error; err != nil {
+		log.Printf("warning: failed to alter visual_vector dimension, recreating asset_embeddings: %v", err)
+		if err := db.Exec(`DROP TABLE IF EXISTS asset_embeddings`).Error; err != nil {
+			return err
+		}
+		if err := db.Exec(`
+			CREATE TABLE asset_embeddings (
+				asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
+				semantic_vector vector(1024),
+				visual_vector vector(512),
+				PRIMARY KEY (asset_id)
+			)
+		`).Error; err != nil {
+			return err
+		}
 	}
 
 	indexStatements := []string{

@@ -51,6 +51,35 @@ class AssetProcessor:
         )
         logger.info("MinIO connection established")
 
+        await self._requeue_incomplete_assets()
+
+    async def _requeue_incomplete_assets(self):
+        """Recover tasks that were left in PENDING/PROCESSING when worker restarted."""
+        async with AsyncSession(self.db_engine) as session:
+            result = await session.execute(
+                text("""
+                    SELECT id::text
+                    FROM assets
+                    WHERE processing_status IN ('PENDING', 'PROCESSING')
+                    ORDER BY created_at ASC
+                """)
+            )
+            candidate_ids = [row[0] for row in result.fetchall()]
+
+        if not candidate_ids:
+            return
+
+        queued_ids = set(await self.redis.lrange(settings.task_queue_name, 0, -1))
+        requeued = 0
+        for asset_id in candidate_ids:
+            if asset_id in queued_ids:
+                continue
+            await self.redis.lpush(settings.task_queue_name, asset_id)
+            requeued += 1
+
+        if requeued > 0:
+            logger.info(f"Recovered {requeued} incomplete assets into queue")
+
     async def close(self):
         """Close connections."""
         if self.redis:
@@ -85,6 +114,7 @@ class AssetProcessor:
         """Process a single asset."""
         async with AsyncSession(self.db_engine) as session:
             try:
+                logger.info(f"[{asset_id}] Marking status as PROCESSING")
                 # Update status to PROCESSING
                 await session.execute(
                     text("UPDATE assets SET processing_status = 'PROCESSING' WHERE id = :id"),
@@ -92,6 +122,7 @@ class AssetProcessor:
                 )
                 await session.commit()
 
+                logger.info(f"[{asset_id}] Loading asset metadata")
                 # Get asset info
                 result = await session.execute(
                     text("SELECT bucket_name, object_name, mime_type FROM assets WHERE id = :id"),
@@ -107,10 +138,12 @@ class AssetProcessor:
 
                 # Download file from MinIO
                 with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    logger.info(f"[{asset_id}] Downloading from MinIO: {bucket_name}/{object_name}")
                     self.minio_client.fget_object(bucket_name, object_name, tmp.name)
                     tmp_path = tmp.name
 
                 try:
+                    logger.info(f"[{asset_id}] Dispatching processor for mime={mime_type}")
                     # Route to appropriate processor
                     if mime_type.startswith("image/"):
                         await self._process_image(session, asset_id, tmp_path)
@@ -135,6 +168,7 @@ class AssetProcessor:
 
             except Exception as e:
                 logger.error(f"Failed to process asset {asset_id}: {e}")
+                await session.rollback()
                 await session.execute(
                     text("UPDATE assets SET processing_status = 'FAILED' WHERE id = :id"),
                     {"id": asset_id}
@@ -145,21 +179,69 @@ class AssetProcessor:
         """Process an image file."""
         from PIL import Image
         from core.vision import get_vision_model
-        from core.embeddings import get_image_embedder
+        from core.embeddings import get_image_embedder, get_text_embedder
 
         logger.info(f"Processing image: {asset_id}")
 
         # Load image
         image = Image.open(file_path).convert("RGB")
 
-        # Generate caption
+        # Generate caption from image.
         vision_model = get_vision_model()
-        caption = vision_model.caption(image)
-        logger.info(f"Generated caption: {caption[:100]}...")
+        caption_en = vision_model.caption(
+            image,
+            prompt="Describe this image with key objects and actions.",
+        )
+        caption = caption_en
 
-        # Generate embedding
-        embedder = get_image_embedder()
-        embedding = embedder.embed_pil(image)
+        # Add Chinese translation to improve Chinese keyword search ("女的", "猫", etc.).
+        caption_zh = ""
+        try:
+            from core.llm import get_llm_service
+
+            llm = get_llm_service()
+            caption_zh = llm.generate(
+                (
+                    "Translate this image caption into concise Chinese. "
+                    "Return only the Chinese sentence.\n\n"
+                    f"Caption: {caption_en}"
+                ),
+                max_tokens=96,
+                temperature=0.2,
+                top_p=0.9,
+            ).strip()
+
+        except Exception as exc:
+            logger.warning(f"Failed to translate image caption to Chinese: {exc}")
+
+        if not caption_zh:
+            lowered = caption_en.lower()
+            keyword_map = {
+                "女性": ("female", "woman", "girl", "lady"),
+                "男性": ("male", "man", "boy", "gentleman"),
+                "人物": ("person", "people", "character", "portrait"),
+                "动漫": ("anime", "cartoon", "manga"),
+                "舞台": ("stage", "performance", "concert"),
+                "室内": ("indoor", "inside", "room"),
+                "室外": ("outdoor", "outside"),
+            }
+            tags = [zh for zh, keys in keyword_map.items() if any(key in lowered for key in keys)]
+            if tags:
+                caption_zh = "，".join(tags)
+
+        if caption_zh:
+            caption = f"{caption_en} | 中文: {caption_zh}"
+
+        logger.info(f"Generated caption: {caption[:120]}...")
+
+        # Generate embeddings:
+        # - visual_vector for image-image retrieval
+        # - semantic_vector from caption for text-image retrieval
+        visual_embedder = get_image_embedder()
+        visual_embedding = visual_embedder.embed_pil(image)
+
+        text_embedder = get_text_embedder()
+        semantic_embedding = text_embedder.embed_single(caption[:2000])
 
         # Update database
         await session.execute(
@@ -167,15 +249,22 @@ class AssetProcessor:
             {"caption": caption, "id": asset_id}
         )
 
-        # Store embedding (convert to string for pgvector)
-        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        # Store embeddings (convert to pgvector string literal)
+        visual_embedding_str = "[" + ",".join(str(x) for x in visual_embedding) + "]"
+        semantic_embedding_str = "[" + ",".join(str(x) for x in semantic_embedding) + "]"
         await session.execute(
             text("""
-                INSERT INTO asset_embeddings (asset_id, visual_vector)
-                VALUES (:id, :vector::vector)
-                ON CONFLICT (asset_id) DO UPDATE SET visual_vector = :vector::vector
+                INSERT INTO asset_embeddings (asset_id, semantic_vector, visual_vector)
+                VALUES (:id, CAST(:semantic_vector AS vector), CAST(:visual_vector AS vector))
+                ON CONFLICT (asset_id) DO UPDATE
+                SET semantic_vector = CAST(:semantic_vector AS vector),
+                    visual_vector = CAST(:visual_vector AS vector)
             """),
-            {"id": asset_id, "vector": embedding_str}
+            {
+                "id": asset_id,
+                "semantic_vector": semantic_embedding_str,
+                "visual_vector": visual_embedding_str,
+            }
         )
         await session.commit()
 
@@ -209,8 +298,8 @@ class AssetProcessor:
             await session.execute(
                 text("""
                     INSERT INTO asset_embeddings (asset_id, semantic_vector)
-                    VALUES (:id, :vector::vector)
-                    ON CONFLICT (asset_id) DO UPDATE SET semantic_vector = :vector::vector
+                    VALUES (:id, CAST(:vector AS vector))
+                    ON CONFLICT (asset_id) DO UPDATE SET semantic_vector = CAST(:vector AS vector)
                 """),
                 {"id": asset_id, "vector": embedding_str}
             )
@@ -242,8 +331,8 @@ class AssetProcessor:
         await session.execute(
             text("""
                 INSERT INTO asset_embeddings (asset_id, semantic_vector)
-                VALUES (:id, :vector::vector)
-                ON CONFLICT (asset_id) DO UPDATE SET semantic_vector = :vector::vector
+                VALUES (:id, CAST(:vector AS vector))
+                ON CONFLICT (asset_id) DO UPDATE SET semantic_vector = CAST(:vector AS vector)
             """),
             {"id": asset_id, "vector": embedding_str}
         )

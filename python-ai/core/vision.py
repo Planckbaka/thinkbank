@@ -3,9 +3,10 @@ ThinkBank AI Service - Vision Captioning
 SmolVLM for image understanding - runs on CPU/Offload
 """
 
-from typing import Optional, List
+from typing import Optional
 from PIL import Image
 from loguru import logger
+import torch
 
 from .config import settings
 
@@ -40,6 +41,7 @@ class VisionCaptioningModel:
         logger.info(f"Loading vision model: {self.model_name}")
 
         # Load on CPU to save GPU memory for LLM
+        device = "cpu"
         self.processor = AutoProcessor.from_pretrained(
             self.model_name,
             trust_remote_code=True
@@ -47,38 +49,54 @@ class VisionCaptioningModel:
         self.model = AutoModelForVision2Seq.from_pretrained(
             self.model_name,
             trust_remote_code=True,
-            torch_dtype="auto",  # Will use float32 on CPU
-            device_map="cpu",
+            torch_dtype=torch.float32,
+            device_map=device,
         )
+        self.model.to(device)
         self._loaded = True
         logger.info("Vision model loaded successfully on CPU")
 
     def caption(
         self,
         image: Image.Image,
-        prompt: str = "Describe this image in detail.",
+        prompt: str = "Describe this image with key objects and actions.",
         max_tokens: int = 256,
     ) -> str:
         """Generate caption for an image."""
         if not self._loaded:
             self.load()
 
-        # Prepare inputs
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": prompt}
-                ]
-            }
-        ]
-
-        inputs = self.processor(
-            images=[image],
-            text=self.processor.apply_chat_template(messages, add_generation_prompt=True),
-            return_tensors="pt",
-        )
+        # SmolVLM-like processors expose chat templates; BLIP-style processors do not.
+        if hasattr(self.processor, "apply_chat_template"):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": prompt}
+                    ]
+                }
+            ]
+            try:
+                inputs = self.processor(
+                    images=[image],
+                    text=self.processor.apply_chat_template(messages, add_generation_prompt=True),
+                    return_tensors="pt",
+                )
+            except Exception as exc:
+                logger.warning(f"Chat template unavailable for {self.model_name}, fallback to plain prompt: {exc}")
+                inputs = self.processor(
+                    images=image,
+                    text=prompt,
+                    return_tensors="pt",
+                )
+        else:
+            inputs = self.processor(
+                images=image,
+                text=prompt,
+                return_tensors="pt",
+            )
+        inputs = {k: v.to("cpu") if hasattr(v, "to") else v for k, v in inputs.items()}
 
         # Generate
         output_ids = self.model.generate(
@@ -88,10 +106,10 @@ class VisionCaptioningModel:
         )
 
         # Decode
-        caption = self.processor.decode(output_ids[0], skip_special_tokens=True)
+        caption = self.processor.decode(output_ids[0], skip_special_tokens=True).strip()
         return caption
 
-    def caption_path(self, image_path: str, prompt: str = "Describe this image in detail.") -> str:
+    def caption_path(self, image_path: str, prompt: str = "Describe this image with key objects and actions.") -> str:
         """Generate caption for an image from file path."""
         image = Image.open(image_path).convert("RGB")
         return self.caption(image, prompt)

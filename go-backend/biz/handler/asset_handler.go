@@ -158,6 +158,11 @@ func ListAssets(ctx context.Context, c *app.RequestContext) {
 	// Convert to response
 	responses := make([]AssetResponse, len(assets))
 	for i, asset := range assets {
+		url, err := minio.GetFileURL(ctx, asset.BucketName, asset.ObjectName, 3600)
+		if err != nil {
+			url = ""
+		}
+
 		responses[i] = AssetResponse{
 			ID:               asset.ID.String(),
 			FileName:         filepath.Base(asset.ObjectName),
@@ -165,6 +170,7 @@ func ListAssets(ctx context.Context, c *app.RequestContext) {
 			SizeBytes:        asset.SizeBytes,
 			Caption:          asset.Caption,
 			ProcessingStatus: asset.ProcessingStatus,
+			URL:              url,
 			Metadata:         asset.Metadata,
 			CreatedAt:        asset.CreatedAt,
 		}
